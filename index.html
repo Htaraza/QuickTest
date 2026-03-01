@@ -1,0 +1,1819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#000000" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="QuickTest" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <title>QuickTest</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" href="/icon-192.png" type="image/png" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; }
+    body { font-family: "DM Sans", -apple-system, sans-serif; background: #000; color: #0f0e0c; -webkit-font-smoothing: antialiased; overscroll-behavior: none; }
+    #splash { position: fixed; inset: 0; background: #000; display: flex; align-items: center; justify-content: center; z-index: 9999; transition: opacity 0.5s ease; }
+    #splash h1 { font-family: "DM Serif Display", serif; font-size: clamp(2.5rem,8vw,5rem); color: #f7f4ef; }
+    #splash.hidden { opacity: 0; pointer-events: none; }
+    ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-thumb { background: #d8d2c8; border-radius: 3px; }
+    #root { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+  </style>
+</head>
+<body>
+  <div id="splash"><h1>QuickTest</h1></div>
+  <div id="root"></div>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <script>
+    const { useState, useEffect, useCallback, useRef } = React;
+    window.QT_API_BASE = window.location.origin + '/api';
+  </script>
+  <script type="text/babel" data-presets="react">
+
+// ─── Utility ────────────────────────────────────────────────────────────────
+const generateCode = () => Math.random().toString(36).substring(2, 8).toUpperCase();
+const generateId = () => Math.random().toString(36).substring(2, 12);
+
+// ─── Storage helpers ─────────────────────────────────────────────────────────
+// ─── API Client ──────────────────────────────────────────────────────────────
+const API_BASE = window.QT_API_BASE || '/api';
+
+async function apiFetch(path, options = {}) {
+  const token = localStorage.getItem('qt_token');
+  const res = await fetch(API_BASE + path, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: 'Bearer ' + token } : {}),
+      ...(options.headers || {})
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+// localStorage fallback storage (kept for offline/demo mode)
+const storage = {
+  async get(key) {
+    try { const v = localStorage.getItem('qt:' + key); return v ? JSON.parse(v) : null; }
+    catch { return null; }
+  },
+  async set(key, val) {
+    try { localStorage.setItem('qt:' + key, JSON.stringify(val)); } catch {}
+  },
+  async list(prefix) {
+    try {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('qt:' + prefix)) keys.push(k.slice(3));
+      }
+      return keys;
+    } catch { return []; }
+  }
+};
+window._qtDelete = (key) => { try { localStorage.removeItem('qt:' + key); } catch {} };
+
+// ─── FONTS ───────────────────────────────────────────────────────────────────
+const FontLink = () => (
+  <style>{`
+    @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --ink: #0f0e0c;
+      --paper: #f7f4ef;
+      --cream: #ede9e0;
+      --accent: #c84b31;
+      --accent2: #2d6a4f;
+      --muted: #8a8072;
+      --border: #d8d2c8;
+      --white: #ffffff;
+      --danger: #c84b31;
+      --success: #2d6a4f;
+      --gold: #b8860b;
+    }
+    body { font-family: 'DM Sans', sans-serif; background: var(--paper); color: var(--ink); min-height: 100vh; }
+    h1,h2,h3,h4 { font-family: 'DM Serif Display', serif; }
+    button { cursor: pointer; font-family: 'DM Sans', sans-serif; }
+    input, textarea, select { font-family: 'DM Sans', sans-serif; }
+    * { outline: none; }
+  `}</style>
+);
+
+// ─── GLOBAL STYLES ────────────────────────────────────────────────────────────
+const S = {
+  // Layout
+  app: { minHeight: "100vh", background: "var(--paper)" },
+  // Landing
+  landing: {
+    minHeight: "100vh", display: "flex", flexDirection: "column",
+    alignItems: "center", justifyContent: "center",
+    background: "#000000",
+    padding: "2rem", position: "relative", overflow: "hidden"
+  },
+  landingTitle: {
+    fontSize: "clamp(2.5rem,8vw,5rem)", color: "var(--paper)",
+    textAlign: "center", lineHeight: 1.1, marginBottom: "0.5rem"
+  },
+  landingSubtitle: {
+    fontSize: "1.1rem", color: "var(--muted)", textAlign: "center",
+    marginBottom: "3rem", letterSpacing: "0.05em", fontWeight: 300
+  },
+  cardRow: { display: "flex", gap: "1.5rem", flexWrap: "wrap", justifyContent: "center" },
+  portalCard: {
+    background: "rgba(247,244,239,0.05)", border: "1px solid rgba(247,244,239,0.15)",
+    borderRadius: "16px", padding: "2.5rem 2rem", width: "260px", textAlign: "center",
+    cursor: "pointer", transition: "all 0.3s ease", backdropFilter: "blur(10px)"
+  },
+  portalCardIcon: { fontSize: "2.5rem", marginBottom: "1rem" },
+  portalCardTitle: { color: "var(--paper)", fontSize: "1.4rem", marginBottom: "0.5rem" },
+  portalCardDesc: { color: "var(--muted)", fontSize: "0.9rem", lineHeight: 1.5 },
+  // Auth form
+  authWrap: {
+    minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
+    background: "linear-gradient(145deg, #0f0e0c 0%, #1a1915 100%)", padding: "2rem"
+  },
+  authBox: {
+    background: "var(--paper)", borderRadius: "20px", padding: "3rem 2.5rem",
+    width: "100%", maxWidth: "420px", boxShadow: "0 40px 80px rgba(0,0,0,0.4)"
+  },
+  authTitle: { fontSize: "2rem", marginBottom: "0.25rem" },
+  authSub: { color: "var(--muted)", fontSize: "0.9rem", marginBottom: "2rem" },
+  // Form controls
+  label: { display: "block", fontSize: "0.8rem", fontWeight: 600, letterSpacing: "0.08em",
+    textTransform: "uppercase", color: "var(--muted)", marginBottom: "0.4rem" },
+  input: {
+    width: "100%", padding: "0.75rem 1rem", border: "1.5px solid var(--border)",
+    borderRadius: "8px", fontSize: "1rem", background: "var(--white)",
+    color: "var(--ink)", transition: "border 0.2s"
+  },
+  textarea: {
+    width: "100%", padding: "0.75rem 1rem", border: "1.5px solid var(--border)",
+    borderRadius: "8px", fontSize: "1rem", background: "var(--white)",
+    color: "var(--ink)", minHeight: "100px", resize: "vertical"
+  },
+  select: {
+    width: "100%", padding: "0.75rem 1rem", border: "1.5px solid var(--border)",
+    borderRadius: "8px", fontSize: "1rem", background: "var(--white)", color: "var(--ink)"
+  },
+  btn: {
+    padding: "0.75rem 1.5rem", borderRadius: "8px", fontSize: "0.95rem",
+    fontWeight: 600, border: "none", transition: "all 0.2s"
+  },
+  btnPrimary: { background: "var(--ink)", color: "var(--paper)" },
+  btnAccent: { background: "var(--accent)", color: "var(--white)" },
+  btnSuccess: { background: "var(--accent2)", color: "var(--white)" },
+  btnGhost: { background: "transparent", color: "var(--ink)", border: "1.5px solid var(--border)" },
+  btnDanger: { background: "var(--danger)", color: "var(--white)" },
+  // Dashboard
+  dashWrap: { minHeight: "100vh", display: "flex", background: "var(--paper)" },
+  sidebar: {
+    width: "240px", background: "var(--ink)", color: "var(--paper)",
+    padding: "2rem 1.5rem", display: "flex", flexDirection: "column", gap: "0.5rem",
+    flexShrink: 0
+  },
+  sidebarTitle: { fontSize: "1.3rem", color: "var(--paper)", marginBottom: "1.5rem" },
+  navItem: {
+    padding: "0.65rem 1rem", borderRadius: "8px", cursor: "pointer",
+    fontSize: "0.9rem", display: "flex", alignItems: "center", gap: "0.6rem",
+    transition: "background 0.2s", color: "rgba(247,244,239,0.7)"
+  },
+  navItemActive: { background: "rgba(247,244,239,0.12)", color: "var(--paper)" },
+  main: { flex: 1, padding: "2.5rem", overflowY: "auto" },
+  pageTitle: { fontSize: "2rem", marginBottom: "0.5rem" },
+  pageSub: { color: "var(--muted)", marginBottom: "2rem" },
+  // Cards
+  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: "1.5rem" },
+  card: {
+    background: "var(--white)", border: "1.5px solid var(--border)", borderRadius: "12px",
+    padding: "1.5rem", transition: "box-shadow 0.2s"
+  },
+  cardTitle: { fontSize: "1.1rem", marginBottom: "0.25rem" },
+  cardMeta: { fontSize: "0.8rem", color: "var(--muted)", marginBottom: "1rem" },
+  badge: {
+    display: "inline-block", padding: "0.2rem 0.6rem", borderRadius: "20px",
+    fontSize: "0.75rem", fontWeight: 600
+  },
+  // Tag states
+  badgeDraft: { background: "#f0ece4", color: "#8a8072" },
+  badgeActive: { background: "#d4edda", color: "#2d6a4f" },
+  badgeClosed: { background: "#fde8e4", color: "#c84b31" },
+  // Question builder
+  qCard: {
+    background: "var(--white)", border: "1.5px solid var(--border)", borderRadius: "12px",
+    padding: "1.5rem", marginBottom: "1rem"
+  },
+  optionRow: { display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.5rem" },
+  // Student test
+  testWrap: {
+    minHeight: "100vh", background: "var(--ink)", display: "flex",
+    flexDirection: "column", alignItems: "center", justifyContent: "center",
+    padding: "2rem"
+  },
+  testCard: {
+    background: "var(--paper)", borderRadius: "20px", padding: "2.5rem",
+    width: "100%", maxWidth: "680px", boxShadow: "0 40px 80px rgba(0,0,0,0.5)"
+  },
+  progressBar: { height: "4px", background: "var(--border)", borderRadius: "2px", marginBottom: "2rem" },
+  progressFill: { height: "100%", background: "var(--accent)", borderRadius: "2px", transition: "width 0.4s" },
+  questionNum: { fontSize: "0.8rem", fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: "0.5rem" },
+  questionText: { fontSize: "1.3rem", lineHeight: 1.5, marginBottom: "1.5rem" },
+  optionBtn: {
+    width: "100%", textAlign: "left", padding: "0.85rem 1.1rem",
+    border: "1.5px solid var(--border)", borderRadius: "8px", background: "var(--white)",
+    marginBottom: "0.6rem", fontSize: "0.95rem", transition: "all 0.15s", color: "var(--ink)"
+  },
+  optionBtnSelected: { borderColor: "var(--ink)", background: "var(--ink)", color: "var(--paper)" },
+  navRow: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "1.5rem" },
+  // Results
+  scoreBig: { fontSize: "4rem", fontFamily: "'DM Serif Display', serif", textAlign: "center", marginBottom: "0.25rem" },
+  scoreLabel: { textAlign: "center", color: "var(--muted)", marginBottom: "2rem" },
+  // Misc
+  divider: { border: "none", borderTop: "1.5px solid var(--border)", margin: "1.5rem 0" },
+  error: { background: "#fde8e4", color: "#c84b31", padding: "0.75rem 1rem", borderRadius: "8px", fontSize: "0.9rem", marginBottom: "1rem" },
+  success: { background: "#d4edda", color: "#2d6a4f", padding: "0.75rem 1rem", borderRadius: "8px", fontSize: "0.9rem", marginBottom: "1rem" },
+  fieldGroup: { marginBottom: "1.25rem" },
+  row: { display: "flex", gap: "0.75rem", alignItems: "center" },
+  tableWrap: { overflowX: "auto" },
+  table: { width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" },
+  th: { padding: "0.75rem 1rem", borderBottom: "2px solid var(--border)", textAlign: "left", fontWeight: 600, fontSize: "0.8rem", letterSpacing: "0.05em", textTransform: "uppercase", color: "var(--muted)" },
+  td: { padding: "0.75rem 1rem", borderBottom: "1px solid var(--border)", verticalAlign: "top" },
+  topBar: {
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    marginBottom: "2rem", flexWrap: "wrap", gap: "1rem"
+  }
+};
+
+// ─── TEACHER AUTH (simple in-memory for demo + stored) ───────────────────────
+// Teacher auth is now handled via API
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LANDING PAGE
+// ═══════════════════════════════════════════════════════════════════════════════
+function Landing({ onTeacher, onStudent, onFlashcards }) {
+  return (
+    <div style={S.landing}>
+      {/* Background decoration */}
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, opacity: 0.04, backgroundImage: "repeating-linear-gradient(0deg,transparent,transparent 40px,rgba(255,255,255,1) 40px,rgba(255,255,255,1) 41px),repeating-linear-gradient(90deg,transparent,transparent 40px,rgba(255,255,255,1) 40px,rgba(255,255,255,1) 41px)", pointerEvents: "none" }} />
+      <h1 style={S.landingTitle}>QuickTest</h1>
+      <p style={S.landingSubtitle}>Create · Administer · Grade</p>
+      <div style={S.cardRow}>
+        <div
+          style={S.portalCard}
+          onMouseEnter={e => { e.currentTarget.style.background = "rgba(247,244,239,0.1)"; e.currentTarget.style.transform = "translateY(-4px)"; e.currentTarget.style.borderColor = "rgba(247,244,239,0.3)"; }}
+          onMouseLeave={e => { e.currentTarget.style.background = "rgba(247,244,239,0.05)"; e.currentTarget.style.transform = ""; e.currentTarget.style.borderColor = "rgba(247,244,239,0.15)"; }}
+          onClick={onTeacher}
+        >
+          <div style={S.portalCardIcon}>🎓</div>
+          <h3 style={S.portalCardTitle}>Teacher Portal</h3>
+          <p style={S.portalCardDesc}>Create tests, manage students, and view grades</p>
+        </div>
+        <div
+          style={S.portalCard}
+          onMouseEnter={e => { e.currentTarget.style.background = "rgba(247,244,239,0.1)"; e.currentTarget.style.transform = "translateY(-4px)"; e.currentTarget.style.borderColor = "rgba(247,244,239,0.3)"; }}
+          onMouseLeave={e => { e.currentTarget.style.background = "rgba(247,244,239,0.05)"; e.currentTarget.style.transform = ""; e.currentTarget.style.borderColor = "rgba(247,244,239,0.15)"; }}
+          onClick={onStudent}
+        >
+          <div style={S.portalCardIcon}>📝</div>
+          <h3 style={S.portalCardTitle}>Take a Test</h3>
+          <p style={S.portalCardDesc}>Enter your test code and email to begin</p>
+        </div>
+        <div
+          style={S.portalCard}
+          onMouseEnter={e => { e.currentTarget.style.background = "rgba(247,244,239,0.1)"; e.currentTarget.style.transform = "translateY(-4px)"; e.currentTarget.style.borderColor = "rgba(247,244,239,0.3)"; }}
+          onMouseLeave={e => { e.currentTarget.style.background = "rgba(247,244,239,0.05)"; e.currentTarget.style.transform = ""; e.currentTarget.style.borderColor = "rgba(247,244,239,0.15)"; }}
+          onClick={onFlashcards}
+        >
+          <div style={S.portalCardIcon}>🃏</div>
+          <h3 style={S.portalCardTitle}>Study Flashcards</h3>
+          <p style={S.portalCardDesc}>Enter your deck code and email to study</p>
+        </div>
+      </div>
+      <p style={{ color: "rgba(247,244,239,0.2)", marginTop: "3rem", fontSize: "0.8rem" }}>
+        Demo: teacher@demo.com / demo1234
+      </p>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TEACHER LOGIN
+// ═══════════════════════════════════════════════════════════════════════════════
+function TeacherLogin({ onLogin, onBack, onRegister }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [err, setErr] = useState("");
+
+  const [loading, setLoading] = useState(false);
+  const handleLogin = async () => {
+    if (!email.trim() || !password.trim()) { setErr("Please fill in both fields."); return; }
+    setLoading(true); setErr("");
+    try {
+      const data = await apiFetch('/auth/login', { method: 'POST', body: { email, password } });
+      localStorage.setItem('qt_token', data.token);
+      onLogin(data.teacher);
+    } catch (err) {
+      setErr(err.message || "Invalid email or password.");
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div style={S.authWrap}>
+      <div style={S.authBox}>
+        <button onClick={onBack} style={{ ...S.btn, ...S.btnGhost, fontSize: "0.8rem", marginBottom: "1.5rem" }}>← Back</button>
+        <h2 style={S.authTitle}>Teacher Login</h2>
+        <p style={S.authSub}>Sign in to manage your tests</p>
+        {err && <div style={S.error}>{err}</div>}
+        <div style={S.fieldGroup}>
+          <label style={S.label}>Email</label>
+          <input style={S.input} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="teacher@school.edu" />
+        </div>
+        <div style={S.fieldGroup}>
+          <label style={S.label}>Password</label>
+          <input style={S.input} type="password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLogin()} placeholder="••••••••" />
+        </div>
+        <button onClick={handleLogin} disabled={loading} style={{ ...S.btn, ...S.btnPrimary, width: "100%" }}>{loading ? "Signing in..." : "Sign In"}</button>
+        <div style={{ textAlign: "center", marginTop: "1.25rem" }}>
+          <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>No account? </span>
+          <button onClick={onRegister} style={{ background: "none", border: "none", color: "var(--ink)", fontSize: "0.85rem", fontWeight: 600, cursor: "pointer", textDecoration: "underline" }}>Create teacher account</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TEACHER REGISTER
+// ═══════════════════════════════════════════════════════════════════════════════
+function TeacherRegister({ onLogin, onBack }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleRegister = async () => {
+    if (!name.trim() || !email.trim() || !password.trim()) { setErr("All fields are required."); return; }
+    if (password !== confirm) { setErr("Passwords do not match."); return; }
+    if (password.length < 8) { setErr("Password must be at least 8 characters."); return; }
+    setLoading(true); setErr("");
+    try {
+      const data = await apiFetch('/auth/register', { method: 'POST', body: { name, email, password } });
+      localStorage.setItem('qt_token', data.token);
+      onLogin(data.teacher);
+    } catch (err) {
+      setErr(err.message || "Registration failed.");
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div style={S.authWrap}>
+      <div style={S.authBox}>
+        <button onClick={onBack} style={{ ...S.btn, ...S.btnGhost, fontSize: "0.8rem", marginBottom: "1.5rem" }}>← Back</button>
+        <h2 style={S.authTitle}>Create Account</h2>
+        <p style={S.authSub}>Register as a teacher to get started</p>
+        {err && <div style={S.error}>{err}</div>}
+        <div style={S.fieldGroup}>
+          <label style={S.label}>Your Name</label>
+          <input style={S.input} value={name} onChange={e => setName(e.target.value)} placeholder="Ms. Johnson" />
+        </div>
+        <div style={S.fieldGroup}>
+          <label style={S.label}>Email</label>
+          <input style={S.input} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="teacher@school.edu" />
+        </div>
+        <div style={S.fieldGroup}>
+          <label style={S.label}>Password</label>
+          <input style={S.input} type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Min. 8 characters" />
+        </div>
+        <div style={S.fieldGroup}>
+          <label style={S.label}>Confirm Password</label>
+          <input style={S.input} type="password" value={confirm} onChange={e => setConfirm(e.target.value)} onKeyDown={e => e.key === "Enter" && handleRegister()} placeholder="Re-enter password" />
+        </div>
+        <button onClick={handleRegister} disabled={loading} style={{ ...S.btn, ...S.btnPrimary, width: "100%" }}>
+          {loading ? "Creating account..." : "Create Account"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STUDENT LOGIN
+// ═══════════════════════════════════════════════════════════════════════════════
+function StudentLogin({ onEnter, onBack }) {
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleEnter = async () => {
+    if (!email.trim() || !code.trim()) { setErr("Please fill in both fields."); return; }
+    if (!/\S+@\S+\.\S+/.test(email)) { setErr("Please enter a valid email."); return; }
+    setLoading(true);
+    setErr("");
+    let foundTest = null;
+    try {
+      const data = await apiFetch('/tests/by-code/' + code.toUpperCase());
+      foundTest = data.test;
+    } catch (e) {
+      setErr("Invalid or inactive test code."); setLoading(false); return;
+    }
+    // check if student already submitted
+    try {
+      const chk = await apiFetch(`/submissions/check?testId=${foundTest.id}&email=${encodeURIComponent(email.toLowerCase())}`);
+      if (chk.exists && !chk.retakeAllowed) {
+        setErr("You have already taken this test. Contact your teacher to retake.");
+        setLoading(false); return;
+      }
+    } catch (e) { /* no submission yet, fine */ }
+    setLoading(false);
+    onEnter({ test: foundTest, email: email.toLowerCase() });
+  };
+
+  return (
+    <div style={S.authWrap}>
+      <div style={S.authBox}>
+        <button onClick={onBack} style={{ ...S.btn, ...S.btnGhost, fontSize: "0.8rem", marginBottom: "1.5rem" }}>← Back</button>
+        <h2 style={S.authTitle}>Student Portal</h2>
+        <p style={S.authSub}>Enter your details to access your test</p>
+        {err && <div style={S.error}>{err}</div>}
+        <div style={S.fieldGroup}>
+          <label style={S.label}>Your Email</label>
+          <input style={S.input} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="student@school.edu" />
+        </div>
+        <div style={S.fieldGroup}>
+          <label style={S.label}>Test Code</label>
+          <input style={S.input} type="text" value={code} onChange={e => setCode(e.target.value.toUpperCase())} onKeyDown={e => e.key === "Enter" && handleEnter()} placeholder="ABC123" maxLength={8} style={{ ...S.input, letterSpacing: "0.2em", textTransform: "uppercase" }} />
+        </div>
+        <button onClick={handleEnter} disabled={loading} style={{ ...S.btn, ...S.btnPrimary, width: "100%" }}>
+          {loading ? "Checking..." : "Enter Test →"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TEACHER DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════════════
+function TeacherDashboard({ teacher, onLogout }) {
+  const [view, setView] = useState("tests");
+  const [tests, setTests] = useState([]);
+  const [decks, setDecks] = useState([]);
+  const [editingTest, setEditingTest] = useState(null);
+  const [editingDeck, setEditingDeck] = useState(null);
+  const [selectedTestId, setSelectedTestId] = useState(null);
+  const [msg, setMsg] = useState("");
+
+  const loadTests = useCallback(async () => {
+    try {
+      const data = await apiFetch('/tests');
+      setTests(data.tests || []);
+    } catch (e) { console.error('loadTests', e); }
+  }, []);
+
+  const loadDecks = useCallback(async () => {
+    try {
+      const data = await apiFetch('/decks');
+      setDecks(data.decks || []);
+    } catch (e) { console.error('loadDecks', e); }
+  }, []);
+
+  useEffect(() => { loadTests(); loadDecks(); }, [loadTests, loadDecks]);
+
+  const saveTest = async (test) => {
+    try {
+      if (test.id && tests.find(t => t.id === test.id)) {
+        await apiFetch('/tests/' + test.id, { method: 'PUT', body: test });
+      } else {
+        await apiFetch('/tests', { method: 'POST', body: test });
+      }
+      await loadTests();
+    } catch (e) { flash('Error saving test: ' + e.message); }
+  };
+  const saveDeck = async (deck) => {
+    try {
+      if (deck.id && decks.find(d => d.id === deck.id)) {
+        await apiFetch('/decks/' + deck.id, { method: 'PUT', body: deck });
+      } else {
+        await apiFetch('/decks', { method: 'POST', body: deck });
+      }
+      await loadDecks();
+    } catch (e) { flash('Error saving deck: ' + e.message); }
+  };
+  const deleteTest = async (id) => {
+    try { await apiFetch('/tests/' + id, { method: 'DELETE' }); await loadTests(); }
+    catch (e) { flash('Error deleting: ' + e.message); }
+  };
+  const deleteDeck = async (id) => {
+    try { await apiFetch('/decks/' + id, { method: 'DELETE' }); await loadDecks(); }
+    catch (e) { flash('Error deleting: ' + e.message); }
+  };
+  const flash = (m) => { setMsg(m); setTimeout(() => setMsg(""), 3000); };
+
+  return (
+    <div style={S.dashWrap}>
+      <div style={S.sidebar}>
+        <h2 style={S.sidebarTitle}>QuickTest</h2>
+        <div style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: "0.75rem" }}>{teacher.name || teacher.email}</div>
+        <div style={{ height: "1px", background: "rgba(255,255,255,0.08)", marginBottom: "0.75rem" }} />
+        <div style={{ fontSize: "0.7rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(247,244,239,0.3)", padding: "0 1rem", marginBottom: "0.3rem" }}>Tests</div>
+        {[{ id: "tests", icon: "📋", label: "My Tests" }, { id: "create", icon: "✏️", label: "Create Test" }].map(n => (
+          <div key={n.id} style={{ ...S.navItem, ...(view === n.id || (view === "edit" && n.id === "create") ? S.navItemActive : {}) }}
+            onClick={() => { setView(n.id); if (n.id === "create") setEditingTest(null); }}>
+            {n.icon} {n.label}
+          </div>
+        ))}
+        <div style={{ height: "1px", background: "rgba(255,255,255,0.08)", margin: "0.75rem 0 0.5rem" }} />
+        <div style={{ fontSize: "0.7rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(247,244,239,0.3)", padding: "0 1rem", marginBottom: "0.3rem" }}>Flashcards</div>
+        {[{ id: "decks", icon: "🃏", label: "My Decks" }, { id: "create-deck", icon: "➕", label: "Create Deck" }].map(n => (
+          <div key={n.id} style={{ ...S.navItem, ...(view === n.id || (view === "edit-deck" && n.id === "create-deck") ? S.navItemActive : {}) }}
+            onClick={() => { setView(n.id); if (n.id === "create-deck") setEditingDeck(null); }}>
+            {n.icon} {n.label}
+          </div>
+        ))}
+        <div style={{ marginTop: "auto" }}>
+          <div style={{ ...S.navItem }} onClick={onLogout}>🚪 Log Out</div>
+        </div>
+      </div>
+      <div style={S.main}>
+        {msg && <div style={{ ...S.success, position: "fixed", top: "1rem", right: "1rem", zIndex: 999 }}>{msg}</div>}
+        {view === "tests" && <TestList tests={tests} onEdit={t => { setEditingTest(t); setView("edit"); }} onDelete={deleteTest} onGrades={t => { setSelectedTestId(t.id); setView("grades"); }} onSave={saveTest} flash={flash} onNew={() => setView("create")} />}
+        {(view === "create" || view === "edit") && <TestBuilder test={editingTest} onSave={async (t) => { await saveTest(t); flash("Test saved!"); setView("tests"); }} onCancel={() => setView("tests")} />}
+        {view === "grades" && <GradesView testId={selectedTestId} tests={tests} onBack={() => setView("tests")} onSave={saveTest} flash={flash} />}
+        {view === "decks" && <DeckList decks={decks} onEdit={d => { setEditingDeck(d); setView("edit-deck"); }} onDelete={deleteDeck} onSave={saveDeck} flash={flash} onNew={() => { setEditingDeck(null); setView("create-deck"); }} />}
+        {(view === "create-deck" || view === "edit-deck") && <DeckBuilder deck={editingDeck} onSave={async (d) => { await saveDeck(d); flash("Deck saved!"); setView("decks"); }} onCancel={() => setView("decks")} />}
+      </div>
+    </div>
+  );
+}
+// ─── TEST LIST ────────────────────────────────────────────────────────────────
+function TestList({ tests, onEdit, onDelete, onGrades, onSave, flash, onNew }) {
+  const toggleStatus = async (test) => {
+    const newStatus = test.status === "active" ? "closed" : test.status === "draft" ? "active" : "draft";
+    await onSave({ ...test, status: newStatus });
+    flash(`Test ${newStatus === "active" ? "activated" : newStatus === "closed" ? "closed" : "set to draft"}`);
+  };
+
+  const regenerateCode = async (test) => {
+    await onSave({ ...test, code: generateCode() });
+    flash("New code generated!");
+  };
+
+  return (
+    <>
+      <div style={S.topBar}>
+        <div>
+          <h1 style={S.pageTitle}>My Tests</h1>
+          <p style={S.pageSub}>{tests.length} test{tests.length !== 1 ? "s" : ""} total</p>
+        </div>
+        <button onClick={onNew} style={{ ...S.btn, ...S.btnPrimary }}>+ Create New Test</button>
+      </div>
+      {tests.length === 0 && (
+        <div style={{ ...S.card, textAlign: "center", padding: "4rem" }}>
+          <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>📋</div>
+          <h3 style={{ marginBottom: "0.5rem" }}>No tests yet</h3>
+          <p style={{ color: "var(--muted)", marginBottom: "1.5rem" }}>Create your first test to get started</p>
+          <button onClick={onNew} style={{ ...S.btn, ...S.btnPrimary }}>Create Test</button>
+        </div>
+      )}
+      <div style={S.grid}>
+        {tests.map(test => (
+          <div key={test.id} style={S.card}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.5rem" }}>
+              <h3 style={S.cardTitle}>{test.title}</h3>
+              <span style={{ ...S.badge, ...(test.status === "active" ? S.badgeActive : test.status === "closed" ? S.badgeClosed : S.badgeDraft) }}>
+                {test.status}
+              </span>
+            </div>
+            <p style={S.cardMeta}>{test.questions?.length || 0} questions · {test.questions?.reduce((s, q) => s + (q.points || 0), 0)} pts</p>
+            <div style={{ background: "var(--cream)", borderRadius: "8px", padding: "0.6rem 0.8rem", marginBottom: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Code:</span>
+              <span style={{ fontFamily: "monospace", fontWeight: 700, letterSpacing: "0.15em", fontSize: "1.1rem" }}>{test.code}</span>
+              <button onClick={() => regenerateCode(test)} title="New code" style={{ background: "none", border: "none", cursor: "pointer", fontSize: "1rem" }}>🔄</button>
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              <button onClick={() => onEdit(test)} style={{ ...S.btn, ...S.btnGhost, fontSize: "0.8rem", padding: "0.4rem 0.8rem" }}>Edit</button>
+              <button onClick={() => toggleStatus(test)} style={{ ...S.btn, background: test.status === "active" ? "#fde8e4" : "#d4edda", color: test.status === "active" ? "#c84b31" : "#2d6a4f", border: "none", fontSize: "0.8rem", padding: "0.4rem 0.8rem", borderRadius: "8px" }}>
+                {test.status === "active" ? "Close" : "Activate"}
+              </button>
+              <button onClick={() => onGrades(test)} style={{ ...S.btn, ...S.btnGhost, fontSize: "0.8rem", padding: "0.4rem 0.8rem" }}>📊 Grades</button>
+              <button onClick={() => onDelete(test.id)} style={{ ...S.btn, background: "none", border: "none", color: "var(--danger)", fontSize: "0.8rem", padding: "0.4rem 0.8rem", borderRadius: "8px" }}>🗑</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+// ─── TEST BUILDER ─────────────────────────────────────────────────────────────
+function TestBuilder({ test, onSave, onCancel }) {
+  const [title, setTitle] = useState(test?.title || "");
+  const [description, setDescription] = useState(test?.description || "");
+  const [inApp, setInApp] = useState(test?.inApp !== false);
+  const [questions, setQuestions] = useState(test?.questions || []);
+  const [err, setErr] = useState("");
+
+  const addQuestion = (type) => {
+    setQuestions([...questions, {
+      id: generateId(), type,
+      text: "", points: 1,
+      options: type === "essay" ? [] : ["", ""],
+      correctAnswers: [],
+      required: true
+    }]);
+  };
+
+  const updateQuestion = (idx, patch) => {
+    setQuestions(questions.map((q, i) => i === idx ? { ...q, ...patch } : q));
+  };
+
+  const removeQuestion = (idx) => {
+    setQuestions(questions.filter((_, i) => i !== idx));
+  };
+
+  const moveQuestion = (idx, dir) => {
+    const qs = [...questions];
+    const target = idx + dir;
+    if (target < 0 || target >= qs.length) return;
+    [qs[idx], qs[target]] = [qs[target], qs[idx]];
+    setQuestions(qs);
+  };
+
+  const handleSave = () => {
+    if (!title.trim()) { setErr("Please add a title."); return; }
+    if (questions.length === 0) { setErr("Add at least one question."); return; }
+    for (let i = 0; i < questions.length; i++) {
+      if (!questions[i].text.trim()) { setErr(`Question ${i + 1} has no text.`); return; }
+    }
+    const saved = {
+      id: test?.id || generateId(),
+      title: title.trim(),
+      description: description.trim(),
+      inApp,
+      questions,
+      code: test?.code || generateCode(),
+      status: test?.status || "draft",
+      createdAt: test?.createdAt || Date.now(),
+      updatedAt: Date.now()
+    };
+    onSave(saved);
+  };
+
+  return (
+    <>
+      <div style={S.topBar}>
+        <div>
+          <h1 style={S.pageTitle}>{test ? "Edit Test" : "Create Test"}</h1>
+          <p style={S.pageSub}>Build your assessment</p>
+        </div>
+        <div style={{ display: "flex", gap: "0.75rem" }}>
+          <button onClick={onCancel} style={{ ...S.btn, ...S.btnGhost }}>Cancel</button>
+          <button onClick={handleSave} style={{ ...S.btn, ...S.btnPrimary }}>Save Test</button>
+        </div>
+      </div>
+      {err && <div style={S.error}>{err}</div>}
+      <div style={{ ...S.card, marginBottom: "1.5rem" }}>
+        <div style={S.fieldGroup}>
+          <label style={S.label}>Test Title *</label>
+          <input style={S.input} value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Chapter 5 Quiz" />
+        </div>
+        <div style={S.fieldGroup}>
+          <label style={S.label}>Description / Instructions</label>
+          <textarea style={S.textarea} value={description} onChange={e => setDescription(e.target.value)} placeholder="Any instructions for students..." />
+        </div>
+        <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}>
+            <input type="checkbox" checked={inApp} onChange={e => setInApp(e.target.checked)} />
+            <span style={{ fontSize: "0.9rem" }}>Students complete in-app</span>
+          </label>
+          <span style={{ color: "var(--muted)", fontSize: "0.85rem" }}>
+            {inApp ? "App will grade automatically" : "Print/paper — questions shown on screen, answers on paper"}
+          </span>
+        </div>
+      </div>
+
+      {questions.map((q, idx) => (
+        <QuestionEditor key={q.id} q={q} idx={idx} total={questions.length}
+          onChange={patch => updateQuestion(idx, patch)}
+          onRemove={() => removeQuestion(idx)}
+          onMove={dir => moveQuestion(idx, dir)}
+          inApp={inApp}
+        />
+      ))}
+
+      <div style={{ ...S.card, background: "var(--cream)", border: "2px dashed var(--border)" }}>
+        <p style={{ marginBottom: "1rem", fontWeight: 600 }}>Add Question</p>
+        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+          {[
+            { type: "multiple_choice", label: "Multiple Choice", icon: "🔘" },
+            { type: "multiple_select", label: "Multiple Select", icon: "☑️" },
+            { type: "true_false", label: "True / False", icon: "✅" },
+            { type: "short_answer", label: "Short Answer", icon: "📝" },
+            { type: "essay", label: "Essay", icon: "📄" },
+          ].map(t => (
+            <button key={t.type} onClick={() => addQuestion(t.type)}
+              style={{ ...S.btn, ...S.btnGhost, fontSize: "0.85rem" }}>
+              {t.icon} {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
+function QuestionEditor({ q, idx, total, onChange, onRemove, onMove, inApp }) {
+  const typeLabels = { multiple_choice: "Multiple Choice", multiple_select: "Multiple Select", true_false: "True / False", short_answer: "Short Answer", essay: "Essay" };
+
+  const addOption = () => onChange({ options: [...q.options, ""] });
+  const updateOption = (i, val) => onChange({ options: q.options.map((o, j) => j === i ? val : o) });
+  const removeOption = (i) => onChange({ options: q.options.filter((_, j) => j !== i), correctAnswers: q.correctAnswers.filter(a => a !== q.options[i]) });
+  const toggleCorrect = (opt) => {
+    if (q.type === "multiple_choice" || q.type === "true_false") {
+      onChange({ correctAnswers: [opt] });
+    } else {
+      const cur = q.correctAnswers || [];
+      onChange({ correctAnswers: cur.includes(opt) ? cur.filter(a => a !== opt) : [...cur, opt] });
+    }
+  };
+
+  return (
+    <div style={S.qCard}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          <span style={{ ...S.badge, background: "var(--cream)", color: "var(--muted)" }}>Q{idx + 1}</span>
+          <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>{typeLabels[q.type]}</span>
+        </div>
+        <div style={{ display: "flex", gap: "0.4rem" }}>
+          <button onClick={() => onMove(-1)} disabled={idx === 0} style={{ background: "none", border: "none", cursor: "pointer", opacity: idx === 0 ? 0.3 : 1 }}>↑</button>
+          <button onClick={() => onMove(1)} disabled={idx === total - 1} style={{ background: "none", border: "none", cursor: "pointer", opacity: idx === total - 1 ? 0.3 : 1 }}>↓</button>
+          <button onClick={onRemove} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--danger)" }}>✕</button>
+        </div>
+      </div>
+
+      <div style={S.fieldGroup}>
+        <label style={S.label}>Question Text *</label>
+        <textarea style={{ ...S.textarea, minHeight: "70px" }} value={q.text} onChange={e => onChange({ text: e.target.value })} placeholder="Enter your question..." />
+      </div>
+
+      <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: "80px" }}>
+          <label style={S.label}>Points</label>
+          <input style={{ ...S.input, width: "80px" }} type="number" min="0" value={q.points} onChange={e => onChange({ points: Number(e.target.value) })} />
+        </div>
+      </div>
+
+      {/* Options for MC/MS/TF */}
+      {["multiple_choice", "multiple_select", "true_false"].includes(q.type) && (
+        <div style={{ marginTop: "1rem" }}>
+          <label style={S.label}>Options {inApp && <span style={{ color: "var(--accent2)" }}>(✓ = correct answer{q.type === "multiple_select" ? "s" : ""})</span>}</label>
+          {q.type === "true_false" ? (
+            ["True", "False"].map(opt => (
+              <div key={opt} style={S.optionRow}>
+                {inApp && (
+                  <input type="radio" checked={q.correctAnswers?.includes(opt)} onChange={() => toggleCorrect(opt)} />
+                )}
+                <span style={{ fontSize: "0.95rem" }}>{opt}</span>
+              </div>
+            ))
+          ) : (
+            <>
+              {q.options.map((opt, i) => (
+                <div key={i} style={S.optionRow}>
+                  {inApp && (
+                    q.type === "multiple_choice"
+                      ? <input type="radio" checked={q.correctAnswers?.includes(opt)} onChange={() => toggleCorrect(opt)} />
+                      : <input type="checkbox" checked={q.correctAnswers?.includes(opt)} onChange={() => toggleCorrect(opt)} />
+                  )}
+                  <input style={{ ...S.input, flex: 1 }} value={opt} onChange={e => updateOption(i, e.target.value)} placeholder={`Option ${i + 1}`} />
+                  {q.options.length > 2 && <button onClick={() => removeOption(i)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)" }}>✕</button>}
+                </div>
+              ))}
+              <button onClick={addOption} style={{ ...S.btn, ...S.btnGhost, fontSize: "0.8rem", padding: "0.4rem 0.8rem", marginTop: "0.5rem" }}>+ Option</button>
+            </>
+          )}
+        </div>
+      )}
+
+      {q.type === "short_answer" && inApp && (
+        <div style={{ marginTop: "1rem" }}>
+          <label style={S.label}>Accepted Answers (comma-separated, case-insensitive)</label>
+          <input style={S.input} value={q.correctAnswers?.join(", ") || ""} onChange={e => onChange({ correctAnswers: e.target.value.split(",").map(a => a.trim()) })} placeholder="e.g. Paris, paris" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── GRADES VIEW ──────────────────────────────────────────────────────────────
+function GradesView({ testId, tests, onBack, onSave, flash }) {
+  const [submissions, setSubmissions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [detail, setDetail] = useState(null);
+  const test = tests.find(t => t.id === testId);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await apiFetch(`/submissions/test/${testId}`);
+      setSubmissions(data.submissions || []);
+    } catch (e) { console.error('load submissions', e); }
+    setLoading(false);
+  }, [testId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const allowRetake = async (sub) => {
+    try {
+      await apiFetch(`/submissions/${sub.id}/retake`, { method: 'PATCH' });
+      flash(`Retake allowed for ${sub.email}.`);
+      await load();
+    } catch (e) { flash('Error: ' + e.message); }
+  };
+
+  const gradeManually = async (sub, qIdx, score) => {
+    try {
+      const res = await apiFetch(`/submissions/${sub.id}/grade`, { method: 'PATCH', body: { questionIndex: qIdx, score } });
+      setDetail(prev => ({ ...prev, answers: res.answers, totalScore: res.totalScore, percentage: res.percentage }));
+      await load();
+    } catch (e) { flash('Error saving grade: ' + e.message); }
+  };
+
+  if (!test) return <div>Test not found. <button onClick={onBack}>Back</button></div>;
+
+  if (detail) {
+    const totalPts = test.questions.reduce((s, q) => s + (q.points || 0), 0);
+    return (
+      <>
+        <div style={S.topBar}>
+          <div>
+            <h1 style={S.pageTitle}>{detail.email}</h1>
+            <p style={S.pageSub}>{test.title} · Submitted {new Date(detail.submittedAt).toLocaleString()}</p>
+          </div>
+          <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+            <span style={{ fontSize: "1.5rem", fontFamily: "'DM Serif Display',serif" }}>{detail.percentage}%</span>
+            <button onClick={() => setDetail(null)} style={{ ...S.btn, ...S.btnGhost }}>← Back</button>
+          </div>
+        </div>
+        {test.questions.map((q, i) => {
+          const ans = detail.answers?.[i];
+          const score = ans?.manualScore !== undefined ? ans.manualScore : (ans?.autoScore || 0);
+          return (
+            <div key={q.id} style={{ ...S.card, marginBottom: "1rem" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+                <strong>Q{i + 1}: {q.text}</strong>
+                <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", fontSize: "0.85rem" }}>
+                  <input type="number" min="0" max={q.points} value={score}
+                    onChange={e => gradeManually(detail, i, Number(e.target.value))}
+                    style={{ width: "50px", ...S.input, padding: "0.3rem 0.5rem" }} />
+                  <span style={{ color: "var(--muted)" }}>/ {q.points} pts</span>
+                </div>
+              </div>
+              <div style={{ background: "var(--cream)", padding: "0.75rem", borderRadius: "8px", fontSize: "0.9rem" }}>
+                <strong>Answer: </strong>{ans?.value || <em style={{ color: "var(--muted)" }}>No answer</em>}
+              </div>
+              {q.correctAnswers?.length > 0 && (
+                <div style={{ marginTop: "0.5rem", fontSize: "0.85rem", color: "var(--accent2)" }}>
+                  ✓ Correct: {Array.isArray(q.correctAnswers) ? q.correctAnswers.join(", ") : q.correctAnswers}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div style={S.topBar}>
+        <div>
+          <h1 style={S.pageTitle}>{test.title} — Results</h1>
+          <p style={S.pageSub}>{submissions.length} submission{submissions.length !== 1 ? "s" : ""}</p>
+        </div>
+        <button onClick={onBack} style={{ ...S.btn, ...S.btnGhost }}>← Back</button>
+      </div>
+      {loading && <p>Loading...</p>}
+      {!loading && submissions.length === 0 && (
+        <div style={{ ...S.card, textAlign: "center", padding: "3rem" }}>
+          <p style={{ color: "var(--muted)" }}>No submissions yet</p>
+        </div>
+      )}
+      {submissions.length > 0 && (
+        <div style={S.tableWrap}>
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>Student Email</th>
+                <th style={S.th}>Score</th>
+                <th style={S.th}>Grade</th>
+                <th style={S.th}>Submitted</th>
+                <th style={S.th}>Status</th>
+                <th style={S.th}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {submissions.map(sub => (
+                <tr key={sub.email}>
+                  <td style={S.td}>{sub.email}</td>
+                  <td style={S.td}>{sub.invalidated ? "—" : `${sub.totalScore || 0} / ${sub.totalPoints || 0}`}</td>
+                  <td style={S.td}>
+                    {sub.invalidated
+                      ? <span style={{ ...S.badge, ...S.badgeClosed }}>Invalidated (0)</span>
+                      : <span style={{ ...S.badge, ...S.badgeActive }}>{sub.percentage || 0}%</span>
+                    }
+                  </td>
+                  <td style={S.td} style={{ ...S.td, fontSize: "0.85rem", color: "var(--muted)" }}>{new Date(sub.submittedAt).toLocaleString()}</td>
+                  <td style={S.td}>
+                    {sub.retakeAllowed ? <span style={{ ...S.badge, background: "#fff3cd", color: "#856404" }}>Retake Allowed</span> : ""}
+                  </td>
+                  <td style={S.td}>
+                    <div style={{ display: "flex", gap: "0.4rem" }}>
+                      <button onClick={() => setDetail(sub)} style={{ ...S.btn, ...S.btnGhost, fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}>View</button>
+                      {!sub.invalidated && <button onClick={() => allowRetake(sub)} style={{ ...S.btn, background: "#fff3cd", color: "#856404", border: "none", fontSize: "0.75rem", padding: "0.3rem 0.6rem", borderRadius: "8px" }}>Allow Retake</button>}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STUDENT TEST EXPERIENCE
+// ═══════════════════════════════════════════════════════════════════════════════
+function StudentTest({ test, email, onDone, onInvalidate }) {
+  const [currentQ, setCurrentQ] = useState(0);
+  const [answers, setAnswers] = useState(Array(test.questions.length).fill(null).map(() => ({ value: null })));
+  const [finished, setFinished] = useState(false);
+  const [result, setResult] = useState(null);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const invalidatedRef = useRef(false);
+
+  // Invalidate on visibility change (tab switch / background)
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.hidden && !finished && !invalidatedRef.current) {
+        invalidatedRef.current = true;
+        handleInvalidate();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, [finished]);
+
+  const handleInvalidate = async () => {
+    const subKey = `submission:${test.id}:${email}`;
+    const sub = {
+      email, testId: test.id, answers: [],
+      totalScore: 0, totalPoints: test.questions.reduce((s, q) => s + (q.points || 0), 0),
+      percentage: 0, submittedAt: Date.now(), invalidated: true, retakeAllowed: false
+    };
+    try {
+      await apiFetch('/submissions', { method: 'POST', body: { testId: test.id, studentEmail: email, answers: [], invalidated: true } });
+    } catch (e) { /* best effort */ }
+    onInvalidate();
+  };
+
+  const setAnswer = (val) => {
+    setAnswers(prev => prev.map((a, i) => i === currentQ ? { value: val } : a));
+  };
+
+  const toggleMultiSelect = (opt) => {
+    const cur = answers[currentQ]?.value || [];
+    const next = Array.isArray(cur)
+      ? cur.includes(opt) ? cur.filter(o => o !== opt) : [...cur, opt]
+      : [opt];
+    setAnswer(next);
+  };
+
+  const finish = async () => {
+    setSubmitting(true);
+    setShowConfirm(false);
+    // Grade
+    const q = test.questions;
+    const graded = answers.map((a, i) => {
+      const question = q[i];
+      let autoScore = 0;
+      if (question.type === "multiple_choice" || question.type === "true_false") {
+        if (question.correctAnswers?.length > 0 && a.value === question.correctAnswers[0]) autoScore = question.points || 0;
+      } else if (question.type === "multiple_select") {
+        const correct = new Set(question.correctAnswers || []);
+        const given = new Set(Array.isArray(a.value) ? a.value : []);
+        if ([...correct].every(c => given.has(c)) && [...given].every(g => correct.has(g))) autoScore = question.points || 0;
+      } else if (question.type === "short_answer") {
+        const accepted = (question.correctAnswers || []).map(x => x.toLowerCase().trim());
+        if (accepted.length > 0 && accepted.includes((a.value || "").toLowerCase().trim())) autoScore = question.points || 0;
+      }
+      // essay: 0 auto score, teacher grades manually
+      return { ...a, autoScore };
+    });
+
+    const totalScore = graded.reduce((s, a) => s + (a.autoScore || 0), 0);
+    const totalPoints = q.reduce((s, q) => s + (q.points || 0), 0);
+    const percentage = totalPoints > 0 ? Math.round((totalScore / totalPoints) * 100) : 0;
+    try {
+      const res = await apiFetch('/submissions', { method: 'POST', body: { testId: test.id, studentEmail: email, answers: graded } });
+      setResult({ totalScore: res.totalScore, totalPoints: res.totalPoints, percentage: res.percentage, graded: res.answers || graded });
+    } catch (e) {
+      setResult({ totalScore, totalPoints, percentage, graded });
+    }
+    setFinished(true);
+  };
+
+  if (finished && result) {
+    const hasEssay = test.questions.some(q => q.type === "essay");
+    const allAutoGraded = !hasEssay;
+
+    return (
+      <div style={{ ...S.testWrap, justifyContent: "flex-start", paddingTop: "2rem", paddingBottom: "4rem" }}>
+        {/* Score header card */}
+        <div style={{ ...S.testCard, marginBottom: "1.5rem", maxWidth: "680px", width: "100%" }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", paddingBottom: "1.5rem" }}>
+            <div style={{ fontSize: "3rem", marginBottom: "0.75rem" }}>
+              {result.percentage >= 90 ? "🏆" : result.percentage >= 70 ? "✅" : result.percentage >= 50 ? "📝" : "😔"}
+            </div>
+            <h2 style={{ fontFamily: "'DM Serif Display',serif", fontSize: "1.8rem", marginBottom: "0.25rem" }}>Test Complete!</h2>
+            <p style={{ color: "var(--muted)", fontSize: "0.9rem", marginBottom: "1.5rem" }}>{test.title}</p>
+
+            {allAutoGraded ? (
+              <>
+                <div style={{ fontSize: "4rem", fontFamily: "'DM Serif Display',serif", lineHeight: 1 }}>{result.percentage}%</div>
+                <p style={{ color: "var(--muted)", marginTop: "0.25rem", fontSize: "1rem" }}>
+                  {result.totalScore} / {result.totalPoints} points
+                </p>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: "3rem", fontFamily: "'DM Serif Display',serif", lineHeight: 1 }}>
+                  {result.percentage}%
+                  <span style={{ fontSize: "1rem", color: "var(--muted)", fontFamily: "'DM Sans',sans-serif", marginLeft: "0.5rem" }}>so far</span>
+                </div>
+                <p style={{ color: "var(--muted)", marginTop: "0.25rem", fontSize: "0.95rem" }}>
+                  {result.totalScore} / {result.totalPoints} pts auto-graded
+                </p>
+                <div style={{ marginTop: "0.75rem", background: "#fff3cd", color: "#856404", borderRadius: "8px", padding: "0.6rem 1rem", fontSize: "0.85rem", textAlign: "center" }}>
+                  📋 Essay questions will be graded by your teacher. Your final score may change.
+                </div>
+              </>
+            )}
+
+            {/* Score bar */}
+            <div style={{ width: "100%", marginTop: "1.25rem" }}>
+              <div style={{ height: "8px", background: "var(--border)", borderRadius: "4px", overflow: "hidden" }}>
+                <div style={{
+                  height: "100%", borderRadius: "4px", transition: "width 1s ease",
+                  width: `${result.percentage}%`,
+                  background: result.percentage >= 90 ? "var(--accent2)" : result.percentage >= 70 ? "#5a9e6f" : result.percentage >= 50 ? "var(--gold)" : "var(--accent)"
+                }} />
+              </div>
+            </div>
+          </div>
+
+          <hr style={S.divider} />
+
+          {/* Quick stats row */}
+          <div style={{ display: "flex", justifyContent: "space-around", textAlign: "center", paddingTop: "0.5rem" }}>
+            <div>
+              <div style={{ fontSize: "1.4rem", fontFamily: "'DM Serif Display',serif" }}>
+                {result.graded.filter((a, i) => test.questions[i].type !== "essay" && a.autoScore === test.questions[i].points && test.questions[i].points > 0).length}
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.15rem" }}>Correct</div>
+            </div>
+            <div>
+              <div style={{ fontSize: "1.4rem", fontFamily: "'DM Serif Display',serif" }}>
+                {result.graded.filter((a, i) => test.questions[i].type !== "essay" && a.autoScore === 0 && test.questions[i].correctAnswers?.length > 0).length}
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.15rem" }}>Incorrect</div>
+            </div>
+            {hasEssay && (
+              <div>
+                <div style={{ fontSize: "1.4rem", fontFamily: "'DM Serif Display',serif" }}>
+                  {result.graded.filter((_, i) => test.questions[i].type === "essay").length}
+                </div>
+                <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.15rem" }}>Pending</div>
+              </div>
+            )}
+            <div>
+              <div style={{ fontSize: "1.4rem", fontFamily: "'DM Serif Display',serif" }}>{test.questions.length}</div>
+              <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.15rem" }}>Total Qs</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Answer review — one card per question */}
+        <div style={{ width: "100%", maxWidth: "680px" }}>
+          <h3 style={{ color: "var(--paper)", fontFamily: "'DM Serif Display',serif", fontSize: "1.4rem", marginBottom: "1rem" }}>Answer Review</h3>
+          {test.questions.map((q, i) => {
+            const ans = result.graded[i];
+            const isEssay = q.type === "essay";
+            const hasCorrect = q.correctAnswers?.length > 0;
+            const isCorrect = !isEssay && hasCorrect && ans.autoScore === q.points;
+            const isWrong = !isEssay && hasCorrect && ans.autoScore < q.points;
+            const isPending = isEssay;
+
+            const borderColor = isPending ? "#b8860b" : isCorrect ? "#2d6a4f" : isWrong ? "#c84b31" : "var(--border)";
+            const bgStripe = isPending ? "rgba(184,134,11,0.06)" : isCorrect ? "rgba(45,106,79,0.06)" : isWrong ? "rgba(200,75,49,0.06)" : "transparent";
+
+            return (
+              <div key={q.id} style={{
+                background: "var(--paper)", borderRadius: "14px", padding: "1.5rem",
+                marginBottom: "1rem", border: `2px solid ${borderColor}`,
+                position: "relative", overflow: "hidden"
+              }}>
+                {/* Color stripe on left */}
+                <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: "4px", background: borderColor }} />
+
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.75rem", paddingLeft: "0.5rem" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                    <span style={{ ...S.badge, background: "var(--cream)", color: "var(--muted)" }}>Q{i + 1}</span>
+                    <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>
+                      {q.type === "multiple_choice" ? "Multiple Choice" : q.type === "multiple_select" ? "Multiple Select" : q.type === "true_false" ? "True / False" : q.type === "short_answer" ? "Short Answer" : "Essay"}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    {isPending && <span style={{ ...S.badge, background: "#fff3cd", color: "#856404" }}>⏳ Pending</span>}
+                    {isCorrect && <span style={{ ...S.badge, background: "#d4edda", color: "#2d6a4f" }}>✓ Correct</span>}
+                    {isWrong && <span style={{ ...S.badge, background: "#fde8e4", color: "#c84b31" }}>✗ Incorrect</span>}
+                    {!hasCorrect && !isPending && <span style={{ ...S.badge, background: "var(--cream)", color: "var(--muted)" }}>No key set</span>}
+                    <span style={{ fontSize: "0.85rem", fontWeight: 600, color: isPending ? "var(--gold)" : isCorrect ? "var(--accent2)" : isWrong ? "var(--accent)" : "var(--muted)" }}>
+                      {isPending ? `? / ${q.points}` : `${ans.autoScore} / ${q.points}`} pts
+                    </span>
+                  </div>
+                </div>
+
+                {/* Question text */}
+                <p style={{ fontSize: "1rem", lineHeight: 1.5, marginBottom: "1rem", fontWeight: 500, paddingLeft: "0.5rem" }}>{q.text}</p>
+
+                {/* Your answer */}
+                <div style={{ paddingLeft: "0.5rem" }}>
+                  <p style={{ fontSize: "0.75rem", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--muted)", marginBottom: "0.4rem" }}>Your Answer</p>
+
+                  {/* For MC/TF/MS — show options with highlighting */}
+                  {["multiple_choice", "true_false"].includes(q.type) && (
+                    <div>
+                      {(q.type === "true_false" ? ["True", "False"] : q.options).map((opt, j) => {
+                        const wasSelected = ans.value === opt;
+                        const isCorrectOpt = q.correctAnswers?.includes(opt);
+                        let optBg = "var(--white)", optBorder = "var(--border)", optColor = "var(--ink)";
+                        if (wasSelected && isCorrectOpt) { optBg = "#d4edda"; optBorder = "#2d6a4f"; optColor = "#2d6a4f"; }
+                        else if (wasSelected && !isCorrectOpt) { optBg = "#fde8e4"; optBorder = "#c84b31"; optColor = "#c84b31"; }
+                        else if (!wasSelected && isCorrectOpt && hasCorrect) { optBg = "#edf7f1"; optBorder = "#2d6a4f"; optColor = "#2d6a4f"; }
+                        return (
+                          <div key={j} style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.6rem 0.9rem", border: `1.5px solid ${optBorder}`, borderRadius: "8px", background: optBg, marginBottom: "0.4rem", color: optColor, fontSize: "0.9rem" }}>
+                            <span style={{ fontWeight: 600, opacity: 0.6, minWidth: "16px" }}>{String.fromCharCode(65 + j)}.</span>
+                            <span style={{ flex: 1 }}>{opt}</span>
+                            {wasSelected && isCorrectOpt && <span>✓</span>}
+                            {wasSelected && !isCorrectOpt && <span>✗</span>}
+                            {!wasSelected && isCorrectOpt && hasCorrect && <span style={{ fontSize: "0.75rem" }}>← correct</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {q.type === "multiple_select" && (
+                    <div>
+                      {q.options.map((opt, j) => {
+                        const wasSelected = Array.isArray(ans.value) && ans.value.includes(opt);
+                        const isCorrectOpt = q.correctAnswers?.includes(opt);
+                        let optBg = "var(--white)", optBorder = "var(--border)", optColor = "var(--ink)";
+                        if (wasSelected && isCorrectOpt) { optBg = "#d4edda"; optBorder = "#2d6a4f"; optColor = "#2d6a4f"; }
+                        else if (wasSelected && !isCorrectOpt) { optBg = "#fde8e4"; optBorder = "#c84b31"; optColor = "#c84b31"; }
+                        else if (!wasSelected && isCorrectOpt && hasCorrect) { optBg = "#edf7f1"; optBorder = "#2d6a4f"; optColor = "#2d6a4f"; }
+                        return (
+                          <div key={j} style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.6rem 0.9rem", border: `1.5px solid ${optBorder}`, borderRadius: "8px", background: optBg, marginBottom: "0.4rem", color: optColor, fontSize: "0.9rem" }}>
+                            <span>{wasSelected ? "☑" : "☐"}</span>
+                            <span style={{ flex: 1 }}>{opt}</span>
+                            {wasSelected && isCorrectOpt && <span>✓</span>}
+                            {wasSelected && !isCorrectOpt && <span>✗</span>}
+                            {!wasSelected && isCorrectOpt && hasCorrect && <span style={{ fontSize: "0.75rem" }}>← should select</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {(q.type === "short_answer" || q.type === "essay") && (
+                    <div style={{ background: isWrong ? "#fde8e4" : isPending ? "#fffbeb" : isCorrect ? "#edf7f1" : "var(--cream)", border: `1.5px solid ${borderColor}`, borderRadius: "8px", padding: "0.75rem 1rem", fontSize: "0.9rem", color: "var(--ink)", lineHeight: 1.6 }}>
+                      {ans.value || <em style={{ color: "var(--muted)" }}>No answer provided</em>}
+                    </div>
+                  )}
+
+                  {/* Show correct answer for short_answer if wrong */}
+                  {q.type === "short_answer" && isWrong && hasCorrect && (
+                    <div style={{ marginTop: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      <span style={{ fontSize: "0.8rem", color: "var(--accent2)", fontWeight: 600 }}>✓ Accepted:</span>
+                      <span style={{ fontSize: "0.85rem", color: "var(--accent2)" }}>{q.correctAnswers.join(", ")}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Done button */}
+          <div style={{ textAlign: "center", marginTop: "1.5rem" }}>
+            <p style={{ color: "rgba(247,244,239,0.5)", fontSize: "0.85rem", marginBottom: "1rem" }}>
+              Your results have been saved and your teacher has been notified.
+            </p>
+            <button onClick={onDone} style={{ ...S.btn, background: "var(--paper)", color: "var(--ink)", padding: "0.85rem 2.5rem", fontSize: "1rem" }}>
+              Done
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const q = test.questions[currentQ];
+  const ans = answers[currentQ];
+  const progress = ((currentQ + 1) / test.questions.length) * 100;
+  const answeredCount = answers.filter(a => a.value !== null && a.value !== undefined && a.value !== "").length;
+
+  return (
+    <div style={S.testWrap}>
+      {/* Confirmation Modal */}
+      {showConfirm && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
+          <div style={{ background: "var(--paper)", borderRadius: "16px", padding: "2rem", maxWidth: "380px", width: "100%", textAlign: "center", boxShadow: "0 40px 80px rgba(0,0,0,0.5)" }}>
+            <div style={{ fontSize: "2.5rem", marginBottom: "0.75rem" }}>📋</div>
+            <h3 style={{ fontFamily: "'DM Serif Display',serif", fontSize: "1.5rem", marginBottom: "0.5rem" }}>Submit Test?</h3>
+            <p style={{ color: "var(--muted)", fontSize: "0.9rem", marginBottom: "0.75rem", lineHeight: 1.5 }}>
+              You answered {answeredCount} of {test.questions.length} questions.
+            </p>
+            {answeredCount < test.questions.length && (
+              <div style={{ background: "#fff3cd", color: "#856404", borderRadius: "8px", padding: "0.6rem 0.9rem", fontSize: "0.85rem", marginBottom: "1rem" }}>
+                ⚠️ {test.questions.length - answeredCount} question{test.questions.length - answeredCount !== 1 ? "s" : ""} left unanswered
+              </div>
+            )}
+            <p style={{ color: "var(--muted)", fontSize: "0.85rem", marginBottom: "1.5rem" }}>You cannot go back after submitting.</p>
+            <div style={{ display: "flex", gap: "0.75rem", justifyContent: "center" }}>
+              <button onClick={() => setShowConfirm(false)} style={{ ...S.btn, ...S.btnGhost, flex: 1 }}>Go Back</button>
+              <button onClick={finish} style={{ ...S.btn, ...S.btnSuccess, flex: 1 }}>Submit Now</button>
+            </div>
+          </div>
+        </div>
+      )}
+      <div style={S.testCard}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+          <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>{test.title}</span>
+          <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>{email}</span>
+        </div>
+        <div style={S.progressBar}>
+          <div style={{ ...S.progressFill, width: `${progress}%` }} />
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+          <span style={S.questionNum}>Question {currentQ + 1} of {test.questions.length}</span>
+          <div style={{ position: "relative" }}>
+            <button onClick={() => setShowDropdown(!showDropdown)}
+              style={{ ...S.btn, ...S.btnGhost, fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}>
+              Go to ▾
+            </button>
+            {showDropdown && (
+              <div style={{ position: "absolute", right: 0, top: "calc(100% + 4px)", background: "var(--white)", border: "1.5px solid var(--border)", borderRadius: "8px", zIndex: 100, minWidth: "160px", boxShadow: "0 8px 24px rgba(0,0,0,0.1)", maxHeight: "200px", overflowY: "auto" }}>
+                {test.questions.map((qq, i) => (
+                  <div key={i} onClick={() => { setCurrentQ(i); setShowDropdown(false); }}
+                    style={{ padding: "0.6rem 1rem", cursor: "pointer", fontSize: "0.85rem", background: i === currentQ ? "var(--cream)" : "transparent", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>Q{i + 1}</span>
+                    {answers[i]?.value !== null && answers[i]?.value !== undefined && answers[i]?.value !== "" && (
+                      <span style={{ color: "var(--accent2)", fontSize: "0.7rem" }}>✓</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <p style={{ fontSize: "0.75rem", color: "var(--muted)", marginBottom: "0.5rem" }}>
+          {q.type === "multiple_choice" ? "Select one" : q.type === "multiple_select" ? "Select all that apply" : q.type === "true_false" ? "True or False" : q.type === "short_answer" ? "Short answer" : "Essay"}
+          {" · "}{q.points} pt{q.points !== 1 ? "s" : ""}
+        </p>
+        <p style={S.questionText}>{q.text}</p>
+
+        {/* Answer input by type */}
+        {["multiple_choice", "true_false"].includes(q.type) && (
+          <div>
+            {(q.type === "true_false" ? ["True", "False"] : q.options).map((opt, i) => (
+              <button key={i} onClick={() => setAnswer(opt)}
+                style={{ ...S.optionBtn, ...(ans.value === opt ? S.optionBtnSelected : {}) }}>
+                <span style={{ marginRight: "0.75rem", fontWeight: 600, opacity: 0.5 }}>{String.fromCharCode(65 + i)}.</span>{opt}
+              </button>
+            ))}
+          </div>
+        )}
+        {q.type === "multiple_select" && (
+          <div>
+            {q.options.map((opt, i) => {
+              const selected = Array.isArray(ans.value) && ans.value.includes(opt);
+              return (
+                <button key={i} onClick={() => toggleMultiSelect(opt)}
+                  style={{ ...S.optionBtn, ...(selected ? S.optionBtnSelected : {}) }}>
+                  <span style={{ marginRight: "0.75rem" }}>{selected ? "☑" : "☐"}</span>{opt}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {q.type === "short_answer" && (
+          <input style={S.input} value={ans.value || ""} onChange={e => setAnswer(e.target.value)} placeholder="Your answer..." />
+        )}
+        {q.type === "essay" && (
+          <textarea style={{ ...S.textarea, minHeight: "140px" }} value={ans.value || ""} onChange={e => setAnswer(e.target.value)} placeholder="Write your answer here..." />
+        )}
+
+        <div style={S.navRow}>
+          <button onClick={() => setCurrentQ(q => q - 1)} disabled={currentQ === 0}
+            style={{ ...S.btn, ...S.btnGhost, opacity: currentQ === 0 ? 0.4 : 1 }}>← Previous</button>
+          {currentQ < test.questions.length - 1 ? (
+            <button onClick={() => setCurrentQ(q => q + 1)} style={{ ...S.btn, ...S.btnPrimary }}>Next →</button>
+          ) : (
+            <button onClick={() => setShowConfirm(true)} disabled={submitting} style={{ ...S.btn, ...S.btnSuccess }}>
+              {submitting ? "Submitting..." : "✓ Finish Test"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DECK LIST (Teacher)
+// ═══════════════════════════════════════════════════════════════════════════════
+function DeckList({ decks, onEdit, onDelete, onSave, flash, onNew }) {
+  const regenerateCode = async (deck) => { await onSave({ ...deck, code: generateCode() }); flash("New code generated!"); };
+  const toggleStatus = async (deck) => {
+    const s = deck.status === "active" ? "inactive" : "active";
+    await onSave({ ...deck, status: s });
+    flash("Deck " + (s === "active" ? "activated" : "deactivated"));
+  };
+  return (
+    <>
+      <div style={S.topBar}>
+        <div>
+          <h1 style={S.pageTitle}>Flashcard Decks</h1>
+          <p style={S.pageSub}>{decks.length} deck{decks.length !== 1 ? "s" : ""} total</p>
+        </div>
+        <button onClick={onNew} style={{ ...S.btn, ...S.btnPrimary }}>+ Create New Deck</button>
+      </div>
+      {decks.length === 0 && (
+        <div style={{ ...S.card, textAlign: "center", padding: "4rem" }}>
+          <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>🃏</div>
+          <h3 style={{ marginBottom: "0.5rem" }}>No decks yet</h3>
+          <p style={{ color: "var(--muted)", marginBottom: "1.5rem" }}>Create a flashcard deck for your students to study</p>
+          <button onClick={onNew} style={{ ...S.btn, ...S.btnPrimary }}>Create Deck</button>
+        </div>
+      )}
+      <div style={S.grid}>
+        {decks.map(deck => (
+          <div key={deck.id} style={{ ...S.card, borderLeft: "4px solid #2d6a4f" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.5rem" }}>
+              <h3 style={S.cardTitle}>{deck.title}</h3>
+              <span style={{ ...S.badge, ...(deck.status === "active" ? S.badgeActive : S.badgeDraft) }}>
+                {deck.status === "active" ? "active" : "inactive"}
+              </span>
+            </div>
+            <p style={S.cardMeta}>{deck.cards?.length || 0} card{deck.cards?.length !== 1 ? "s" : ""}</p>
+            {deck.description && <p style={{ fontSize: "0.85rem", color: "var(--muted)", marginBottom: "0.75rem", lineHeight: 1.4 }}>{deck.description}</p>}
+            <div style={{ background: "var(--cream)", borderRadius: "8px", padding: "0.6rem 0.8rem", marginBottom: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Code:</span>
+              <span style={{ fontFamily: "monospace", fontWeight: 700, letterSpacing: "0.15em", fontSize: "1.1rem" }}>{deck.code}</span>
+              <button onClick={() => regenerateCode(deck)} title="New code" style={{ background: "none", border: "none", cursor: "pointer", fontSize: "1rem" }}>🔄</button>
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              <button onClick={() => onEdit(deck)} style={{ ...S.btn, ...S.btnGhost, fontSize: "0.8rem", padding: "0.4rem 0.8rem" }}>Edit</button>
+              <button onClick={() => toggleStatus(deck)} style={{ ...S.btn, background: deck.status === "active" ? "#fde8e4" : "#d4edda", color: deck.status === "active" ? "#c84b31" : "#2d6a4f", border: "none", fontSize: "0.8rem", padding: "0.4rem 0.8rem", borderRadius: "8px" }}>
+                {deck.status === "active" ? "Deactivate" : "Activate"}
+              </button>
+              <button onClick={() => onDelete(deck.id)} style={{ background: "none", border: "none", color: "var(--danger)", fontSize: "0.8rem", padding: "0.4rem 0.8rem", borderRadius: "8px", cursor: "pointer" }}>🗑</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DECK BUILDER (Teacher)
+// ═══════════════════════════════════════════════════════════════════════════════
+function DeckBuilder({ deck, onSave, onCancel }) {
+  const [title, setTitle] = useState(deck?.title || "");
+  const [description, setDescription] = useState(deck?.description || "");
+  const [cards, setCards] = useState(deck?.cards || [{ id: generateId(), front: "", back: "", hint: "" }]);
+  const [err, setErr] = useState("");
+
+  const addCard = () => setCards(prev => [...prev, { id: generateId(), front: "", back: "", hint: "" }]);
+  const updateCard = (idx, patch) => setCards(prev => prev.map((c, i) => i === idx ? { ...c, ...patch } : c));
+  const removeCard = (idx) => { if (cards.length === 1) return; setCards(prev => prev.filter((_, i) => i !== idx)); };
+  const moveCard = (idx, dir) => {
+    const cs = [...cards]; const t = idx + dir;
+    if (t < 0 || t >= cs.length) return;
+    [cs[idx], cs[t]] = [cs[t], cs[idx]]; setCards(cs);
+  };
+  const handleSave = () => {
+    if (!title.trim()) { setErr("Please add a title."); return; }
+    for (let i = 0; i < cards.length; i++) {
+      if (!cards[i].front.trim() || !cards[i].back.trim()) { setErr("Card " + (i+1) + " needs both a front and back."); return; }
+    }
+    onSave({ id: deck?.id || generateId(), title: title.trim(), description: description.trim(), cards, code: deck?.code || generateCode(), status: deck?.status || "inactive", createdAt: deck?.createdAt || Date.now(), updatedAt: Date.now() });
+  };
+
+  return (
+    <>
+      <div style={S.topBar}>
+        <div>
+          <h1 style={S.pageTitle}>{deck ? "Edit Deck" : "Create Flashcard Deck"}</h1>
+          <p style={S.pageSub}>Build your study set — {cards.length} card{cards.length !== 1 ? "s" : ""}</p>
+        </div>
+        <div style={{ display: "flex", gap: "0.75rem" }}>
+          <button onClick={onCancel} style={{ ...S.btn, ...S.btnGhost }}>Cancel</button>
+          <button onClick={handleSave} style={{ ...S.btn, ...S.btnPrimary }}>Save Deck</button>
+        </div>
+      </div>
+      {err && <div style={S.error}>{err}</div>}
+      <div style={{ ...S.card, marginBottom: "1.5rem" }}>
+        <div style={S.fieldGroup}>
+          <label style={S.label}>Deck Title *</label>
+          <input style={S.input} value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Chapter 5 Vocabulary" />
+        </div>
+        <div style={S.fieldGroup}>
+          <label style={S.label}>Description (optional)</label>
+          <input style={S.input} value={description} onChange={e => setDescription(e.target.value)} placeholder="What is this deck for?" />
+        </div>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+        <h3 style={{ fontFamily: "'DM Serif Display',serif" }}>{cards.length} Card{cards.length !== 1 ? "s" : ""}</h3>
+        <button onClick={addCard} style={{ ...S.btn, ...S.btnSuccess, fontSize: "0.85rem", padding: "0.5rem 1rem" }}>+ Add Card</button>
+      </div>
+      {cards.map((card, idx) => (
+        <div key={card.id} style={{ ...S.card, marginBottom: "0.75rem", borderLeft: "4px solid #2d6a4f" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+            <span style={{ ...S.badge, background: "#d4edda", color: "#2d6a4f" }}>Card {idx + 1}</span>
+            <div style={{ display: "flex", gap: "0.4rem" }}>
+              <button onClick={() => moveCard(idx, -1)} disabled={idx === 0} style={{ background: "none", border: "none", cursor: "pointer", opacity: idx === 0 ? 0.3 : 1, fontSize: "1rem" }}>↑</button>
+              <button onClick={() => moveCard(idx, 1)} disabled={idx === cards.length - 1} style={{ background: "none", border: "none", cursor: "pointer", opacity: idx === cards.length - 1 ? 0.3 : 1, fontSize: "1rem" }}>↓</button>
+              <button onClick={() => removeCard(idx)} disabled={cards.length === 1} style={{ background: "none", border: "none", cursor: "pointer", color: cards.length === 1 ? "var(--border)" : "var(--danger)", fontSize: "1rem" }}>✕</button>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+            <div>
+              <label style={S.label}>Front (Question / Term) *</label>
+              <textarea style={{ ...S.textarea, minHeight: "80px" }} value={card.front} onChange={e => updateCard(idx, { front: e.target.value })} placeholder="What appears on the front?" />
+            </div>
+            <div>
+              <label style={S.label}>Back (Answer / Definition) *</label>
+              <textarea style={{ ...S.textarea, minHeight: "80px" }} value={card.back} onChange={e => updateCard(idx, { back: e.target.value })} placeholder="What appears on the back?" />
+            </div>
+          </div>
+          <div style={{ marginTop: "0.75rem" }}>
+            <label style={S.label}>Hint (optional)</label>
+            <input style={S.input} value={card.hint || ""} onChange={e => updateCard(idx, { hint: e.target.value })} placeholder="Optional hint to help students remember..." />
+          </div>
+        </div>
+      ))}
+      <div style={{ textAlign: "center", marginTop: "1.5rem" }}>
+        <button onClick={addCard} style={{ ...S.btn, ...S.btnGhost }}>+ Add Another Card</button>
+      </div>
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FLASHCARD STUDENT LOGIN
+// ═══════════════════════════════════════════════════════════════════════════════
+function FlashcardLogin({ onEnter, onBack }) {
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleEnter = async () => {
+    if (!email.trim() || !code.trim()) { setErr("Please fill in both fields."); return; }
+    if (!/\S+@\S+\.\S+/.test(email)) { setErr("Please enter a valid email."); return; }
+    setLoading(true); setErr("");
+    let foundDeck = null;
+    try {
+      const data = await apiFetch('/decks/by-code/' + code.toUpperCase());
+      foundDeck = data.deck;
+    } catch (e) {
+      setErr("Invalid or inactive deck code."); setLoading(false); return;
+    }
+    setLoading(false);
+    onEnter({ deck: foundDeck, email: email.toLowerCase() });
+  };
+
+  return (
+    <div style={S.authWrap}>
+      <div style={S.authBox}>
+        <button onClick={onBack} style={{ ...S.btn, ...S.btnGhost, fontSize: "0.8rem", marginBottom: "1.5rem" }}>← Back</button>
+        <div style={{ fontSize: "2.5rem", marginBottom: "0.5rem" }}>🃏</div>
+        <h2 style={S.authTitle}>Flashcard Study</h2>
+        <p style={S.authSub}>Enter your deck code to start studying</p>
+        {err && <div style={S.error}>{err}</div>}
+        <div style={S.fieldGroup}>
+          <label style={S.label}>Your Email</label>
+          <input style={S.input} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="student@school.edu" />
+        </div>
+        <div style={S.fieldGroup}>
+          <label style={S.label}>Deck Code</label>
+          <input type="text" value={code} onChange={e => setCode(e.target.value.toUpperCase())} onKeyDown={e => e.key === "Enter" && handleEnter()} placeholder="ABC123" maxLength={8} style={{ ...S.input, letterSpacing: "0.2em", textTransform: "uppercase" }} />
+        </div>
+        <button onClick={handleEnter} disabled={loading} style={{ ...S.btn, ...S.btnSuccess, width: "100%" }}>
+          {loading ? "Loading..." : "Start Studying →"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FLASHCARD STUDY EXPERIENCE (Student)
+// ═══════════════════════════════════════════════════════════════════════════════
+function FlashcardStudy({ deck, email, onDone }) {
+  const [cardIndex, setCardIndex] = useState(0);
+  const [flipped, setFlipped] = useState(false);
+  const [showHint, setShowHint] = useState(false);
+  const [known, setKnown] = useState(new Set());
+  const [stillLearning, setStillLearning] = useState(new Set());
+  const [shuffled, setShuffled] = useState(() => deck.cards.map((_, i) => i));
+  const [mode, setMode] = useState("study");
+
+  const currentIdx = shuffled[cardIndex];
+  const card = deck.cards[currentIdx];
+  const total = shuffled.length;
+  const progress = Math.round((cardIndex / total) * 100);
+
+  const advance = (wasKnown) => {
+    const realIdx = shuffled[cardIndex];
+    if (wasKnown) {
+      setKnown(prev => new Set([...prev, realIdx]));
+      setStillLearning(prev => { const s = new Set(prev); s.delete(realIdx); return s; });
+    } else {
+      setStillLearning(prev => new Set([...prev, realIdx]));
+      setKnown(prev => { const s = new Set(prev); s.delete(realIdx); return s; });
+    }
+    setFlipped(false);
+    setShowHint(false);
+    if (cardIndex + 1 >= total) {
+      setMode("results");
+    } else {
+      setCardIndex(i => i + 1);
+    }
+  };
+
+  const restart = (onlyLearning) => {
+    const base = onlyLearning ? [...stillLearning] : deck.cards.map((_, i) => i);
+    const reshuffled = [...base].sort(() => Math.random() - 0.5);
+    if (reshuffled.length === 0) return;
+    setShuffled(reshuffled);
+    setCardIndex(0); setFlipped(false); setShowHint(false);
+    setKnown(new Set()); setStillLearning(new Set());
+    setMode("study");
+  };
+
+  const doShuffle = () => {
+    setShuffled(deck.cards.map((_, i) => i).sort(() => Math.random() - 0.5));
+    setCardIndex(0); setFlipped(false); setShowHint(false);
+    setKnown(new Set()); setStillLearning(new Set());
+  };
+
+  if (mode === "results") {
+    const knownCount = known.size;
+    const learningCount = stillLearning.size;
+    const pct = total > 0 ? Math.round((knownCount / total) * 100) : 0;
+    return (
+      <div style={{ ...S.testWrap, justifyContent: "center" }}>
+        <div style={{ ...S.testCard, textAlign: "center", maxWidth: "520px" }}>
+          <div style={{ fontSize: "3rem", marginBottom: "0.75rem" }}>{pct >= 80 ? "🏆" : pct >= 50 ? "📈" : "💪"}</div>
+          <h2 style={{ fontFamily: "'DM Serif Display',serif", fontSize: "2rem", marginBottom: "0.5rem" }}>Round Complete!</h2>
+          <p style={{ color: "var(--muted)", marginBottom: "2rem" }}>{deck.title}</p>
+          <div style={{ display: "flex", gap: "1rem", justifyContent: "center", marginBottom: "2rem" }}>
+            <div style={{ background: "#d4edda", borderRadius: "12px", padding: "1.25rem 1.75rem", minWidth: "100px" }}>
+              <div style={{ fontSize: "2rem", fontFamily: "'DM Serif Display',serif", color: "#2d6a4f" }}>{knownCount}</div>
+              <div style={{ fontSize: "0.8rem", color: "#2d6a4f", fontWeight: 600 }}>Got It ✓</div>
+            </div>
+            <div style={{ background: "#fde8e4", borderRadius: "12px", padding: "1.25rem 1.75rem", minWidth: "100px" }}>
+              <div style={{ fontSize: "2rem", fontFamily: "'DM Serif Display',serif", color: "#c84b31" }}>{learningCount}</div>
+              <div style={{ fontSize: "0.8rem", color: "#c84b31", fontWeight: 600 }}>Still Learning</div>
+            </div>
+            <div style={{ background: "var(--cream)", borderRadius: "12px", padding: "1.25rem 1.75rem", minWidth: "100px" }}>
+              <div style={{ fontSize: "2rem", fontFamily: "'DM Serif Display',serif" }}>{pct}%</div>
+              <div style={{ fontSize: "0.8rem", color: "var(--muted)", fontWeight: 600 }}>Mastered</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+            {learningCount > 0 && <button onClick={() => restart(true)} style={{ ...S.btn, ...S.btnAccent, width: "100%" }}>🔁 Study {learningCount} Remaining Card{learningCount !== 1 ? "s" : ""}</button>}
+            <button onClick={() => restart(false)} style={{ ...S.btn, ...S.btnPrimary, width: "100%" }}>🔀 Restart All Cards (Shuffled)</button>
+            <button onClick={onDone} style={{ ...S.btn, ...S.btnGhost, width: "100%" }}>Done</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ ...S.testWrap, justifyContent: "flex-start", paddingTop: "2.5rem" }}>
+      <div style={{ width: "100%", maxWidth: "680px", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem" }}>
+        <div>
+          <div style={{ color: "rgba(247,244,239,0.9)", fontWeight: 600, fontSize: "1rem" }}>{deck.title}</div>
+          <div style={{ color: "rgba(247,244,239,0.4)", fontSize: "0.8rem" }}>{email}</div>
+        </div>
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          <button onClick={doShuffle} style={{ ...S.btn, background: "rgba(255,255,255,0.08)", color: "var(--paper)", border: "1px solid rgba(255,255,255,0.15)", padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>🔀 Shuffle</button>
+          <button onClick={onDone} style={{ ...S.btn, background: "rgba(255,255,255,0.08)", color: "var(--paper)", border: "1px solid rgba(255,255,255,0.15)", padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>✕ Exit</button>
+        </div>
+      </div>
+
+      <div style={{ width: "100%", maxWidth: "680px", marginBottom: "0.5rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ color: "rgba(247,244,239,0.5)", fontSize: "0.8rem" }}>Card {cardIndex + 1} of {total}</span>
+        <div style={{ display: "flex", gap: "0.75rem", fontSize: "0.8rem" }}>
+          <span style={{ color: "#6fcf97" }}>✓ {known.size}</span>
+          <span style={{ color: "#eb5757" }}>✗ {stillLearning.size}</span>
+        </div>
+      </div>
+      <div style={{ width: "100%", maxWidth: "680px", height: "4px", background: "rgba(255,255,255,0.1)", borderRadius: "2px", marginBottom: "1.5rem" }}>
+        <div style={{ height: "100%", width: progress + "%", background: "linear-gradient(90deg, #2d6a4f, #52b788)", borderRadius: "2px", transition: "width 0.4s" }} />
+      </div>
+
+      <div onClick={() => { setFlipped(f => !f); }}
+        style={{ width: "100%", maxWidth: "680px", minHeight: "280px", background: flipped ? "linear-gradient(135deg, #1a3a2a 0%, #2d6a4f 100%)" : "linear-gradient(135deg, #1a1815 0%, #2a2620 100%)", border: "2px solid " + (flipped ? "rgba(82,183,136,0.4)" : "rgba(255,255,255,0.1)"), borderRadius: "20px", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "2.5rem", textAlign: "center", transition: "all 0.3s ease", boxShadow: "0 20px 60px rgba(0,0,0,0.4)", position: "relative", userSelect: "none" }}>
+        <div style={{ position: "absolute", top: "1rem", left: "1.25rem", fontSize: "0.7rem", letterSpacing: "0.12em", textTransform: "uppercase", color: flipped ? "rgba(82,183,136,0.7)" : "rgba(247,244,239,0.3)", fontWeight: 600 }}>
+          {flipped ? "Answer" : "Question"}
+        </div>
+        <div style={{ position: "absolute", top: "1rem", right: "1.25rem", fontSize: "0.75rem", color: "rgba(247,244,239,0.2)" }}>tap to flip</div>
+        <p style={{ fontSize: "clamp(1rem, 3vw, 1.5rem)", color: "var(--paper)", lineHeight: 1.5, fontFamily: flipped ? "'DM Sans',sans-serif" : "'DM Serif Display',serif" }}>
+          {flipped ? card.back : card.front}
+        </p>
+        {!flipped && card.hint && showHint && (
+          <p style={{ marginTop: "1rem", fontSize: "0.85rem", color: "rgba(247,244,239,0.5)", fontStyle: "italic" }}>💡 {card.hint}</p>
+        )}
+      </div>
+
+      {card.hint && !flipped && (
+        <button onClick={() => setShowHint(h => !h)} style={{ marginTop: "0.75rem", background: "none", border: "none", color: "rgba(247,244,239,0.4)", fontSize: "0.85rem", cursor: "pointer", textDecoration: "underline" }}>
+          {showHint ? "Hide hint" : "Show hint 💡"}
+        </button>
+      )}
+
+      <div style={{ width: "100%", maxWidth: "680px", marginTop: "1.5rem" }}>
+        {flipped ? (
+          <div style={{ display: "flex", gap: "1rem" }}>
+            <button onClick={() => advance(false)} style={{ flex: 1, ...S.btn, background: "#c84b31", color: "var(--white)", fontSize: "1rem", padding: "0.9rem" }}>✗ Still Learning</button>
+            <button onClick={() => advance(true)} style={{ flex: 1, ...S.btn, background: "#2d6a4f", color: "var(--white)", fontSize: "1rem", padding: "0.9rem" }}>✓ Got It!</button>
+          </div>
+        ) : (
+          <div style={{ textAlign: "center", color: "rgba(247,244,239,0.3)", fontSize: "0.85rem" }}>Tap the card to reveal the answer, then rate yourself</div>
+        )}
+      </div>
+
+      <div style={{ display: "flex", gap: "0.3rem", marginTop: "1.5rem", flexWrap: "wrap", justifyContent: "center", maxWidth: "680px" }}>
+        {shuffled.map((realIdx, i) => {
+          const isKnown = known.has(realIdx);
+          const isLearning = stillLearning.has(realIdx);
+          const isCurrent = i === cardIndex;
+          return (
+            <div key={i} style={{ width: isCurrent ? "20px" : "8px", height: "8px", borderRadius: "4px", background: isCurrent ? "var(--paper)" : isKnown ? "#52b788" : isLearning ? "#eb5757" : "rgba(255,255,255,0.2)", transition: "all 0.3s" }} />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INVALIDATED SCREEN
+// ═══════════════════════════════════════════════════════════════════════════════
+function InvalidatedScreen({ onHome }) {
+  return (
+    <div style={S.testWrap}>
+      <div style={{ ...S.testCard, textAlign: "center" }}>
+        <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>⚠️</div>
+        <h2 style={{ ...S.pageTitle, marginBottom: "0.5rem" }}>Test Invalidated</h2>
+        <p style={{ color: "var(--muted)", marginBottom: "1.5rem" }}>
+          You left the test or put it in the background. Your test has been submitted with a score of 0.
+          Please contact your teacher to request a retake.
+        </p>
+        <button onClick={onHome} style={{ ...S.btn, ...S.btnPrimary }}>Return Home</button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// APP ROOT
+// ═══════════════════════════════════════════════════════════════════════════════
+function App() {
+  const [screen, setScreen] = useState("landing");
+  const [teacher, setTeacher] = useState(null);
+  const [studentSession, setStudentSession] = useState(null);
+  const [flashcardSession, setFlashcardSession] = useState(null);
+
+  // Auto-restore session from stored token
+  useEffect(() => {
+    const token = localStorage.getItem('qt_token');
+    if (token) {
+      apiFetch('/auth/me').then(data => {
+        setTeacher(data.teacher);
+        setScreen('teacher-dash');
+      }).catch(() => {
+        localStorage.removeItem('qt_token');
+      });
+    }
+  }, []);
+
+  return (
+    <div style={S.app}>
+      <FontLink />
+      {screen === "landing" && (
+        <Landing
+          onTeacher={() => setScreen("teacher-login")}
+          onStudent={() => setScreen("student-login")}
+          onFlashcards={() => setScreen("flashcard-login")}
+        />
+      )}
+      {screen === "teacher-login" && (
+        <TeacherLogin
+          onLogin={(t) => { setTeacher(t); setScreen("teacher-dash"); }}
+          onBack={() => setScreen("landing")}
+          onRegister={() => setScreen("teacher-register")}
+        />
+      )}
+      {screen === "teacher-register" && (
+        <TeacherRegister
+          onLogin={(t) => { setTeacher(t); setScreen("teacher-dash"); }}
+          onBack={() => setScreen("teacher-login")}
+        />
+      )}
+      {screen === "student-login" && (
+        <StudentLogin
+          onEnter={(s) => { setStudentSession(s); setScreen("student-test"); }}
+          onBack={() => setScreen("landing")}
+        />
+      )}
+      {screen === "flashcard-login" && (
+        <FlashcardLogin
+          onEnter={(s) => { setFlashcardSession(s); setScreen("flashcard-study"); }}
+          onBack={() => setScreen("landing")}
+        />
+      )}
+      {screen === "teacher-dash" && teacher && (
+        <TeacherDashboard teacher={teacher} onLogout={() => { localStorage.removeItem("qt_token"); setTeacher(null); setScreen("landing"); }} />
+      )}
+      {screen === "student-test" && studentSession && (
+        <StudentTest
+          test={studentSession.test}
+          email={studentSession.email}
+          onDone={() => setScreen("landing")}
+          onInvalidate={() => setScreen("invalidated")}
+        />
+      )}
+      {screen === "flashcard-study" && flashcardSession && (
+        <FlashcardStudy
+          deck={flashcardSession.deck}
+          email={flashcardSession.email}
+          onDone={() => setScreen("landing")}
+        />
+      )}
+      {screen === "invalidated" && (
+        <InvalidatedScreen onHome={() => setScreen("landing")} />
+      )}
+    </div>
+  );
+}
+
+ReactDOM.render(React.createElement(App), document.getElementById('root'));
+
+  </script>
+  <script>
+    window.addEventListener('load', () => {
+      setTimeout(() => document.getElementById('splash').classList.add('hidden'), 700);
+    });
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+    }
+  </script>
+</body>
+</html>
