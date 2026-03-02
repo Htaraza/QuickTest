@@ -39,7 +39,7 @@ async function buildTest(testRow) {
     createdAt: new Date(testRow.created_at).getTime(),
     updatedAt: new Date(testRow.updated_at).getTime(),
     questions: (questions || []).map(q => ({
-      id: q.id,
+      id: uuidv4(),
       type: q.type,
       text: q.text,
       points: q.points,
