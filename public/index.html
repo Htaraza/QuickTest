@@ -534,11 +534,11 @@ function TeacherDashboard({ teacher, onLogout }) {
     } catch (e) { flash('Error saving deck: ' + e.message); }
   };
   const deleteTest = async (id) => {
-    try { await apiFetch('/tests/' + id, { method: 'DELETE' }); await loadTests(); }
+    try { await apiFetch('/tests/' + id, { method: 'DELETE' }); setTests(prev => prev.filter(t => t.id !== id)); flash('Test deleted.'); }
     catch (e) { flash('Error deleting: ' + e.message); }
   };
   const deleteDeck = async (id) => {
-    try { await apiFetch('/decks/' + id, { method: 'DELETE' }); await loadDecks(); }
+    try { await apiFetch('/decks/' + id, { method: 'DELETE' }); setDecks(prev => prev.filter(d => d.id !== id)); flash('Deck deleted.'); }
     catch (e) { flash('Error deleting: ' + e.message); }
   };
   const flash = (m) => { setMsg(m); setTimeout(() => setMsg(""), 3000); };
