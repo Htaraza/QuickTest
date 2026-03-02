@@ -492,7 +492,7 @@ function TeacherDashboard({ teacher, onLogout }) {
 
   useEffect(() => { loadTests(); loadDecks(); }, [loadTests, loadDecks]);
 
-  const saveTest = async (test) => {
+  const saveTest = async (test, noNav = false) => {
     try {
       let saved;
       if (test.id && tests.find(t => t.id === test.id)) {
@@ -502,16 +502,20 @@ function TeacherDashboard({ teacher, onLogout }) {
         saved = await apiFetch('/tests', { method: 'POST', body: test });
         setTests(prev => [saved.test, ...prev]);
       }
+      if (!noNav) setView('tests');
     } catch (e) { flash('Error saving test: ' + e.message); }
   };
-  const saveDeck = async (deck) => {
+  const saveDeck = async (deck, noNav = false) => {
     try {
+      let saved;
       if (deck.id && decks.find(d => d.id === deck.id)) {
-        await apiFetch('/decks/' + deck.id, { method: 'PUT', body: deck });
+        saved = await apiFetch('/decks/' + deck.id, { method: 'PUT', body: deck });
+        setDecks(prev => prev.map(d => d.id === saved.deck.id ? saved.deck : d));
       } else {
-        await apiFetch('/decks', { method: 'POST', body: deck });
+        saved = await apiFetch('/decks', { method: 'POST', body: deck });
+        setDecks(prev => [saved.deck, ...prev]);
       }
-      await loadDecks();
+      if (!noNav) setView('decks');
     } catch (e) { flash('Error saving deck: ' + e.message); }
   };
   const deleteTest = async (id) => {
@@ -552,10 +556,10 @@ function TeacherDashboard({ teacher, onLogout }) {
       <div style={S.main}>
         {msg && <div style={{ ...S.success, position: "fixed", top: "1rem", right: "1rem", zIndex: 999 }}>{msg}</div>}
         {view === "tests" && <TestList tests={tests} onEdit={t => { setEditingTest(t); setView("edit"); }} onDelete={deleteTest} onGrades={t => { setSelectedTestId(t.id); setView("grades"); }} onSave={saveTest} flash={flash} onNew={() => setView("create")} />}
-        {(view === "create" || view === "edit") && <TestBuilder test={editingTest} onSave={async (t) => { await saveTest(t); flash("Test saved!"); setView("tests"); }} onCancel={() => setView("tests")} />}
+        {(view === "create" || view === "edit") && <TestBuilder test={editingTest} onSave={async (t) => { await saveTest(t); flash("Test saved!"); }} onCancel={() => setView("tests")} />}
         {view === "grades" && <GradesView testId={selectedTestId} tests={tests} onBack={() => setView("tests")} onSave={saveTest} flash={flash} />}
         {view === "decks" && <DeckList decks={decks} onEdit={d => { setEditingDeck(d); setView("edit-deck"); }} onDelete={deleteDeck} onSave={saveDeck} flash={flash} onNew={() => { setEditingDeck(null); setView("create-deck"); }} />}
-        {(view === "create-deck" || view === "edit-deck") && <DeckBuilder deck={editingDeck} onSave={async (d) => { await saveDeck(d); flash("Deck saved!"); setView("decks"); }} onCancel={() => setView("decks")} />}
+        {(view === "create-deck" || view === "edit-deck") && <DeckBuilder deck={editingDeck} onSave={async (d) => { await saveDeck(d); flash("Deck saved!"); }} onCancel={() => setView("decks")} />}
       </div>
     </div>
   );
@@ -564,12 +568,12 @@ function TeacherDashboard({ teacher, onLogout }) {
 function TestList({ tests, onEdit, onDelete, onGrades, onSave, flash, onNew }) {
   const toggleStatus = async (test) => {
     const newStatus = test.status === "active" ? "closed" : test.status === "draft" ? "active" : "draft";
-    await onSave({ ...test, status: newStatus });
+    await onSave({ ...test, status: newStatus }, true);
     flash(`Test ${newStatus === "active" ? "activated" : newStatus === "closed" ? "closed" : "set to draft"}`);
   };
 
   const regenerateCode = async (test) => {
-    await onSave({ ...test, code: generateCode() });
+    await onSave({ ...test, code: generateCode() }, true);
     flash("New code generated!");
   };
 
@@ -824,7 +828,7 @@ function QuestionEditor({ q, idx, total, onChange, onRemove, onMove, inApp }) {
 function GradesView({ testId, tests, onBack, onSave, flash }) {
   const [submissions, setSubmissions] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [detail, setDetail] = useState(null);
+  const [detailIndex, setDetailIndex] = useState(null);
   const test = tests.find(t => t.id === testId);
 
   const load = useCallback(async () => {
@@ -849,26 +853,48 @@ function GradesView({ testId, tests, onBack, onSave, flash }) {
   const gradeManually = async (sub, qIdx, score) => {
     try {
       const res = await apiFetch(`/submissions/${sub.id}/grade`, { method: 'PATCH', body: { questionIndex: qIdx, score } });
-      setDetail(prev => ({ ...prev, answers: res.answers, totalScore: res.totalScore, percentage: res.percentage }));
-      await load();
+      setSubmissions(prev => prev.map((s, i) => i === detailIndex ? { ...s, answers: res.answers, totalScore: res.totalScore, percentage: res.percentage } : s));
     } catch (e) { flash('Error saving grade: ' + e.message); }
   };
 
   if (!test) return <div>Test not found. <button onClick={onBack}>Back</button></div>;
 
-  if (detail) {
-    const totalPts = test.questions.reduce((s, q) => s + (q.points || 0), 0);
+  if (detailIndex !== null) {
+    const detail = submissions[detailIndex];
     return (
       <>
         <div style={S.topBar}>
-          <div>
-            <h1 style={S.pageTitle}>{detail.email}</h1>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+              <button onClick={() => setDetailIndex(null)} style={{ ...S.btn, ...S.btnGhost, fontSize: "0.8rem", padding: "0.3rem 0.7rem" }}>← All Students</button>
+              <select
+                value={detailIndex}
+                onChange={e => setDetailIndex(Number(e.target.value))}
+                style={{ ...S.input, padding: "0.35rem 0.75rem", fontSize: "0.9rem", maxWidth: "260px" }}
+              >
+                {submissions.map((s, i) => (
+                  <option key={s.id} value={i}>{s.email} — {s.invalidated ? "Invalidated" : `${s.percentage}%`}</option>
+                ))}
+              </select>
+            </div>
             <p style={S.pageSub}>{test.title} · Submitted {new Date(detail.submittedAt).toLocaleString()}</p>
           </div>
-          <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
             <span style={{ fontSize: "1.5rem", fontFamily: "'DM Serif Display',serif" }}>{detail.percentage}%</span>
-            <button onClick={() => setDetail(null)} style={{ ...S.btn, ...S.btnGhost }}>← Back</button>
+            <button
+              onClick={() => setDetailIndex(i => Math.max(0, i - 1))}
+              disabled={detailIndex === 0}
+              style={{ ...S.btn, ...S.btnGhost, fontSize: "0.8rem", padding: "0.3rem 0.7rem", opacity: detailIndex === 0 ? 0.4 : 1 }}
+            >← Prev</button>
+            <button
+              onClick={() => setDetailIndex(i => Math.min(submissions.length - 1, i + 1))}
+              disabled={detailIndex === submissions.length - 1}
+              style={{ ...S.btn, ...S.btnGhost, fontSize: "0.8rem", padding: "0.3rem 0.7rem", opacity: detailIndex === submissions.length - 1 ? 0.4 : 1 }}
+            >Next →</button>
           </div>
+        </div>
+        <div style={{ marginBottom: "0.75rem", fontSize: "0.85rem", color: "var(--muted)" }}>
+          Student {detailIndex + 1} of {submissions.length}
         </div>
         {test.questions.map((q, i) => {
           const ans = detail.answers?.[i];
@@ -895,6 +921,13 @@ function GradesView({ testId, tests, onBack, onSave, flash }) {
             </div>
           );
         })}
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: "1rem" }}>
+          <button onClick={() => allowRetake(detail)} style={{ ...S.btn, background: "#fff3cd", color: "#856404", border: "none", fontSize: "0.85rem", borderRadius: "8px" }}>Allow Retake</button>
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <button onClick={() => setDetailIndex(i => Math.max(0, i - 1))} disabled={detailIndex === 0} style={{ ...S.btn, ...S.btnGhost, opacity: detailIndex === 0 ? 0.4 : 1 }}>← Prev Student</button>
+            <button onClick={() => setDetailIndex(i => Math.min(submissions.length - 1, i + 1))} disabled={detailIndex === submissions.length - 1} style={{ ...S.btn, ...S.btnGhost, opacity: detailIndex === submissions.length - 1 ? 0.4 : 1 }}>Next Student →</button>
+          </div>
+        </div>
       </>
     );
   }
@@ -928,8 +961,8 @@ function GradesView({ testId, tests, onBack, onSave, flash }) {
               </tr>
             </thead>
             <tbody>
-              {submissions.map(sub => (
-                <tr key={sub.email}>
+              {submissions.map((sub, i) => (
+                <tr key={sub.id}>
                   <td style={S.td}>{sub.email}</td>
                   <td style={S.td}>{sub.invalidated ? "—" : `${sub.totalScore || 0} / ${sub.totalPoints || 0}`}</td>
                   <td style={S.td}>
@@ -938,13 +971,13 @@ function GradesView({ testId, tests, onBack, onSave, flash }) {
                       : <span style={{ ...S.badge, ...S.badgeActive }}>{sub.percentage || 0}%</span>
                     }
                   </td>
-                  <td style={S.td} style={{ ...S.td, fontSize: "0.85rem", color: "var(--muted)" }}>{new Date(sub.submittedAt).toLocaleString()}</td>
+                  <td style={{ ...S.td, fontSize: "0.85rem", color: "var(--muted)" }}>{new Date(sub.submittedAt).toLocaleString()}</td>
                   <td style={S.td}>
                     {sub.retakeAllowed ? <span style={{ ...S.badge, background: "#fff3cd", color: "#856404" }}>Retake Allowed</span> : ""}
                   </td>
                   <td style={S.td}>
                     <div style={{ display: "flex", gap: "0.4rem" }}>
-                      <button onClick={() => setDetail(sub)} style={{ ...S.btn, ...S.btnGhost, fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}>View</button>
+                      <button onClick={() => setDetailIndex(i)} style={{ ...S.btn, ...S.btnGhost, fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}>View</button>
                       {!sub.invalidated && <button onClick={() => allowRetake(sub)} style={{ ...S.btn, background: "#fff3cd", color: "#856404", border: "none", fontSize: "0.75rem", padding: "0.3rem 0.6rem", borderRadius: "8px" }}>Allow Retake</button>}
                     </div>
                   </td>
@@ -971,6 +1004,13 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
   const [submitting, setSubmitting] = useState(false);
   const invalidatedRef = useRef(false);
 
+  const handleInvalidate = async () => {
+    try {
+      await apiFetch('/submissions', { method: 'POST', body: { testId: test.id, studentEmail: email, answers: [], invalidated: true } });
+    } catch (e) { /* best effort */ }
+    onInvalidate();
+  };
+
   // Invalidate on visibility change (tab switch / background)
   useEffect(() => {
     const handleVisibility = () => {
@@ -982,19 +1022,6 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
     document.addEventListener("visibilitychange", handleVisibility);
     return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, [finished]);
-
-  const handleInvalidate = async () => {
-    const subKey = `submission:${test.id}:${email}`;
-    const sub = {
-      email, testId: test.id, answers: [],
-      totalScore: 0, totalPoints: test.questions.reduce((s, q) => s + (q.points || 0), 0),
-      percentage: 0, submittedAt: Date.now(), invalidated: true, retakeAllowed: false
-    };
-    try {
-      await apiFetch('/submissions', { method: 'POST', body: { testId: test.id, studentEmail: email, answers: [], invalidated: true } });
-    } catch (e) { /* best effort */ }
-    onInvalidate();
-  };
 
   const setAnswer = (val) => {
     setAnswers(prev => prev.map((a, i) => i === currentQ ? { value: val } : a));
@@ -1365,7 +1392,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
 // DECK LIST (Teacher)
 // ═══════════════════════════════════════════════════════════════════════════════
 function DeckList({ decks, onEdit, onDelete, onSave, flash, onNew }) {
-  const regenerateCode = async (deck) => { await onSave({ ...deck, code: generateCode() }); flash("New code generated!"); };
+  const regenerateCode = async (deck) => { await onSave({ ...deck, code: generateCode() }, true); flash("New code generated!"); };
   const toggleStatus = async (deck) => {
     const s = deck.status === "active" ? "inactive" : "active";
     await onSave({ ...deck, status: s });
@@ -1728,7 +1755,18 @@ function InvalidatedScreen({ onHome }) {
 // APP ROOT
 // ═══════════════════════════════════════════════════════════════════════════════
 function App() {
-  const [screen, setScreen] = useState("landing");
+  const [screen, setScreenState] = useState("landing");
+
+  const setScreen = (newScreen) => {
+    window.history.pushState({ screen: newScreen }, "", "");
+    setScreenState(newScreen);
+  };
+
+  useEffect(() => {
+    const handlePop = (e) => setScreenState(e.state?.screen || "landing");
+    window.addEventListener("popstate", handlePop);
+    return () => window.removeEventListener("popstate", handlePop);
+  }, []);
   const [teacher, setTeacher] = useState(null);
   const [studentSession, setStudentSession] = useState(null);
   const [flashcardSession, setFlashcardSession] = useState(null);
