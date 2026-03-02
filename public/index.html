@@ -1602,11 +1602,25 @@ function FlashcardStudy({ deck, email, onDone }) {
   const [showHint, setShowHint] = useState(false);
   const [known, setKnown] = useState(new Set());
   const [stillLearning, setStillLearning] = useState(new Set());
-  const [shuffled, setShuffled] = useState(() => deck.cards.map((_, i) => i));
+  const safeCards = deck?.cards || [];
+  const [shuffled, setShuffled] = useState(() => safeCards.map((_, i) => i));
   const [mode, setMode] = useState("study");
 
+  if (!safeCards.length) {
+    return (
+      <div style={{ ...S.testWrap, justifyContent: "center" }}>
+        <div style={{ ...S.testCard, textAlign: "center", maxWidth: "520px" }}>
+          <div style={{ fontSize: "3rem", marginBottom: "0.75rem" }}>📭</div>
+          <h2 style={{ fontFamily: "'DM Serif Display',serif", fontSize: "1.8rem", marginBottom: "0.5rem" }}>No Cards Yet</h2>
+          <p style={{ color: "var(--muted)", marginBottom: "2rem" }}>This deck has no flashcards to study.</p>
+          <button onClick={onDone} style={{ ...S.btn, ...S.btnGhost, width: "100%" }}>← Go Back</button>
+        </div>
+      </div>
+    );
+  }
+
   const currentIdx = shuffled[cardIndex];
-  const card = deck.cards[currentIdx];
+  const card = safeCards[currentIdx];
   const total = shuffled.length;
   const progress = Math.round((cardIndex / total) * 100);
 
@@ -1629,7 +1643,7 @@ function FlashcardStudy({ deck, email, onDone }) {
   };
 
   const restart = (onlyLearning) => {
-    const base = onlyLearning ? [...stillLearning] : deck.cards.map((_, i) => i);
+    const base = onlyLearning ? [...stillLearning] : safeCards.map((_, i) => i);
     const reshuffled = [...base].sort(() => Math.random() - 0.5);
     if (reshuffled.length === 0) return;
     setShuffled(reshuffled);
@@ -1639,7 +1653,7 @@ function FlashcardStudy({ deck, email, onDone }) {
   };
 
   const doShuffle = () => {
-    setShuffled(deck.cards.map((_, i) => i).sort(() => Math.random() - 0.5));
+    setShuffled(safeCards.map((_, i) => i).sort(() => Math.random() - 0.5));
     setCardIndex(0); setFlipped(false); setShowHint(false);
     setKnown(new Set()); setStillLearning(new Set());
   };
