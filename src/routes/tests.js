@@ -81,7 +81,7 @@ router.post('/', authMiddleware, async (req, res) => {
     if (questions.length > 0) {
       const { error: qErr } = await supabase.from('questions').insert(
         questions.map((q, i) => ({
-          id: q.id || uuidv4(), test_id: test.id, sort_order: i,
+          id: uuidv4(), test_id: test.id, sort_order: i,
           type: q.type, text: q.text, points: q.points || 1,
           options: q.options || [], correct_answers: q.correctAnswers || []
         }))
