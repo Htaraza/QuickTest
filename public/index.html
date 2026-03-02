@@ -494,13 +494,14 @@ function TeacherDashboard({ teacher, onLogout }) {
 
   const saveTest = async (test) => {
     try {
+      let saved;
       if (test.id && tests.find(t => t.id === test.id)) {
-        await apiFetch('/tests/' + test.id, { method: 'PUT', body: test });
+        saved = await apiFetch('/tests/' + test.id, { method: 'PUT', body: test });
+        setTests(prev => prev.map(t => t.id === saved.test.id ? saved.test : t));
       } else {
-        await apiFetch('/tests', { method: 'POST', body: test });
+        saved = await apiFetch('/tests', { method: 'POST', body: test });
+        setTests(prev => [saved.test, ...prev]);
       }
-      await loadTests();
-      setView('tests');
     } catch (e) { flash('Error saving test: ' + e.message); }
   };
   const saveDeck = async (deck) => {
