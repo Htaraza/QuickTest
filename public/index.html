@@ -500,6 +500,7 @@ function TeacherDashboard({ teacher, onLogout }) {
         await apiFetch('/tests', { method: 'POST', body: test });
       }
       await loadTests();
+      setView('tests');
     } catch (e) { flash('Error saving test: ' + e.message); }
   };
   const saveDeck = async (deck) => {
