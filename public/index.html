@@ -32,7 +32,7 @@
   <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <script>
-    const { useState, useEffect, useCallback, useRef } = React;
+    const { useState, useEffect, useCallback, useRef, useMemo, memo } = React;
     window.QT_API_BASE = window.location.origin + '/api';
   </script>
   <script type="text/babel" data-presets="react">
@@ -61,32 +61,9 @@ async function apiFetch(path, options = {}) {
   return data;
 }
 
-// localStorage fallback storage (kept for offline/demo mode)
-const storage = {
-  async get(key) {
-    try { const v = localStorage.getItem('qt:' + key); return v ? JSON.parse(v) : null; }
-    catch { return null; }
-  },
-  async set(key, val) {
-    try { localStorage.setItem('qt:' + key, JSON.stringify(val)); } catch {}
-  },
-  async list(prefix) {
-    try {
-      const keys = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && k.startsWith('qt:' + prefix)) keys.push(k.slice(3));
-      }
-      return keys;
-    } catch { return []; }
-  }
-};
-window._qtDelete = (key) => { try { localStorage.removeItem('qt:' + key); } catch {} };
-
 // ─── FONTS ───────────────────────────────────────────────────────────────────
 const FontLink = () => (
   <style>{`
-    @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
       --ink: #0f0e0c;
@@ -490,6 +467,7 @@ function TeacherDashboard({ teacher, onLogout }) {
   }, []);
   const [selectedTestId, setSelectedTestId] = useState(null);
   const [msg, setMsg] = useState("");
+  const flash = (m) => { setMsg(m); setTimeout(() => setMsg(""), 3000); };
 
   const loadTests = useCallback(async () => {
     try {
@@ -541,7 +519,6 @@ function TeacherDashboard({ teacher, onLogout }) {
     try { await apiFetch('/decks/' + id, { method: 'DELETE' }); setDecks(prev => prev.filter(d => d.id !== id)); flash('Deck deleted.'); }
     catch (e) { flash('Error deleting: ' + e.message); }
   };
-  const flash = (m) => { setMsg(m); setTimeout(() => setMsg(""), 3000); };
 
   return (
     <div style={S.dashWrap}>
@@ -646,6 +623,60 @@ function TestBuilder({ test, onSave, onCancel }) {
   const [inApp, setInApp] = useState(test?.inApp !== false);
   const [questions, setQuestions] = useState(test?.questions || []);
   const [err, setErr] = useState("");
+  const [showPaste, setShowPaste] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+  const [pasteErr, setPasteErr] = useState("");
+
+  const parsePastedQuestions = () => {
+    setPasteErr("");
+    const lines = pasteText.split("\n").map(l => l.trim()).filter(l => l);
+    const parsed = [];
+    let current = null;
+
+    const optionRe = /^([A-Ea-e])[.)]\s+(.+)/;
+    const questionRe = /^(?:\d+[.)]\s*)?(.+\?)\s*$/;
+    const numberedRe = /^\d+[.)]\s+(.+)/;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const optMatch = line.match(optionRe);
+
+      if (optMatch) {
+        // It's an option line like "A. Paris" or "a) London"
+        if (current) current.options.push(optMatch[2].trim());
+      } else if (line.match(numberedRe) || line.match(questionRe)) {
+        // Save previous question
+        if (current) parsed.push(current);
+        const text = (line.match(numberedRe)?.[1] || line).trim();
+        // Detect true/false
+        if (/true.*false|false.*true/i.test(text) || /^(true|false)$/i.test(text)) {
+          current = { type: "true_false", text, options: [], correctAnswers: [], points: 1, required: true };
+        } else {
+          current = { type: "multiple_choice", text, options: [], correctAnswers: [], points: 1, required: true };
+        }
+      } else if (current) {
+        // Continuation or standalone option without letter
+        if (line.length > 0) current.options.push(line);
+      }
+    }
+    if (current) parsed.push(current);
+
+    // Convert questions with no options to short_answer
+    parsed.forEach(q => {
+      if (q.options.length === 0 && q.type === "multiple_choice") q.type = "short_answer";
+      if (q.type === "true_false") q.options = ["True", "False"];
+    });
+
+    if (parsed.length === 0) {
+      setPasteErr("Couldn't detect any questions. Make sure each question is numbered (1. 2. 3.) and options use letters (A. B. C.)");
+      return;
+    }
+
+    setQuestions(prev => [...prev, ...parsed]);
+    setPasteText("");
+    setShowPaste(false);
+    setPasteErr("");
+  };
 
   const addQuestion = (type) => {
     setQuestions([...questions, {
@@ -657,21 +688,23 @@ function TestBuilder({ test, onSave, onCancel }) {
     }]);
   };
 
-  const updateQuestion = (idx, patch) => {
-    setQuestions(questions.map((q, i) => i === idx ? { ...q, ...patch } : q));
-  };
+  const updateQuestion = useCallback((idx, patch) => {
+    setQuestions(prev => prev.map((q, i) => i === idx ? { ...q, ...patch } : q));
+  }, []);
 
-  const removeQuestion = (idx) => {
-    setQuestions(questions.filter((_, i) => i !== idx));
-  };
+  const removeQuestion = useCallback((idx) => {
+    setQuestions(prev => prev.filter((_, i) => i !== idx));
+  }, []);
 
-  const moveQuestion = (idx, dir) => {
-    const qs = [...questions];
-    const target = idx + dir;
-    if (target < 0 || target >= qs.length) return;
-    [qs[idx], qs[target]] = [qs[target], qs[idx]];
-    setQuestions(qs);
-  };
+  const moveQuestion = useCallback((idx, dir) => {
+    setQuestions(prev => {
+      const qs = [...prev];
+      const target = idx + dir;
+      if (target < 0 || target >= qs.length) return prev;
+      [qs[idx], qs[target]] = [qs[target], qs[idx]];
+      return qs;
+    });
+  }, []);
 
   const handleSave = () => {
     if (!title.trim()) { setErr("Please add a title."); return; }
@@ -736,7 +769,30 @@ function TestBuilder({ test, onSave, onCancel }) {
       ))}
 
       <div style={{ ...S.card, background: "var(--cream)", border: "2px dashed var(--border)" }}>
-        <p style={{ marginBottom: "1rem", fontWeight: 600 }}>Add Question</p>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+          <p style={{ fontWeight: 600 }}>Add Question</p>
+          <button onClick={() => setShowPaste(p => !p)} style={{ ...S.btn, background: "#e8f4fd", color: "#1a6fa8", border: "none", fontSize: "0.8rem", padding: "0.35rem 0.8rem", borderRadius: "8px" }}>
+            📋 Paste from Word / Web
+          </button>
+        </div>
+        {showPaste && (
+          <div style={{ marginBottom: "1rem", padding: "1rem", background: "var(--white)", borderRadius: "10px", border: "1.5px solid var(--border)" }}>
+            <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: "0.5rem" }}>
+              Paste questions below. Format: numbered questions (1. 2. 3.) with lettered options (A. B. C.) on separate lines. Questions without options become short answer.
+            </p>
+            <textarea
+              style={{ ...S.textarea, minHeight: "160px", fontSize: "0.85rem", marginBottom: "0.5rem" }}
+              value={pasteText}
+              onChange={e => setPasteText(e.target.value)}
+              placeholder={"1. What is the capital of France?\nA. London\nB. Paris\nC. Berlin\nD. Madrid\n\n2. Explain photosynthesis.\n\n3. The sky is blue.\nA. True\nB. False"}
+            />
+            {pasteErr && <div style={{ ...S.error, marginBottom: "0.5rem" }}>{pasteErr}</div>}
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <button onClick={parsePastedQuestions} style={{ ...S.btn, ...S.btnPrimary, fontSize: "0.85rem" }}>Import Questions</button>
+              <button onClick={() => { setShowPaste(false); setPasteText(""); setPasteErr(""); }} style={{ ...S.btn, ...S.btnGhost, fontSize: "0.85rem" }}>Cancel</button>
+            </div>
+          </div>
+        )}
         <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
           {[
             { type: "multiple_choice", label: "Multiple Choice", icon: "🔘" },
@@ -756,7 +812,7 @@ function TestBuilder({ test, onSave, onCancel }) {
   );
 }
 
-function QuestionEditor({ q, idx, total, onChange, onRemove, onMove, inApp }) {
+const QuestionEditor = memo(function QuestionEditor({ q, idx, total, onChange, onRemove, onMove, inApp }) {
   const typeLabels = { multiple_choice: "Multiple Choice", multiple_select: "Multiple Select", true_false: "True / False", short_answer: "Short Answer", essay: "Essay" };
 
   const addOption = () => onChange({ options: [...q.options, ""] });
@@ -813,7 +869,7 @@ function QuestionEditor({ q, idx, total, onChange, onRemove, onMove, inApp }) {
           ) : (
             <>
               {q.options.map((opt, i) => (
-                <div key={i} style={S.optionRow}>
+                <div key={`opt-${i}-${opt}`} style={S.optionRow}>
                   {inApp && (
                     q.type === "multiple_choice"
                       ? <input type="radio" checked={q.correctAnswers?.includes(opt)} onChange={() => toggleCorrect(opt)} />
@@ -837,7 +893,7 @@ function QuestionEditor({ q, idx, total, onChange, onRemove, onMove, inApp }) {
       )}
     </div>
   );
-}
+});
 
 // ─── GRADES VIEW ──────────────────────────────────────────────────────────────
 function GradesView({ testId, tests, onBack, onSave, flash }) {
@@ -861,14 +917,14 @@ function GradesView({ testId, tests, onBack, onSave, flash }) {
     try {
       await apiFetch(`/submissions/${sub.id}/retake`, { method: 'PATCH' });
       flash(`Retake allowed for ${sub.email}.`);
-      await load();
+      setSubmissions(prev => prev.map(s => s.id === sub.id ? { ...s, retakeAllowed: true } : s));
     } catch (e) { flash('Error: ' + e.message); }
   };
 
-  const gradeManually = async (sub, qIdx, score) => {
+  const gradeManually = async (sub, qIdx, score, subIndex) => {
     try {
       const res = await apiFetch(`/submissions/${sub.id}/grade`, { method: 'PATCH', body: { questionIndex: qIdx, score } });
-      setSubmissions(prev => prev.map((s, i) => i === detailIndex ? { ...s, answers: res.answers, totalScore: res.totalScore, percentage: res.percentage } : s));
+      setSubmissions(prev => prev.map((s, i) => i === subIndex ? { ...s, answers: res.answers, totalScore: res.totalScore, percentage: res.percentage } : s));
     } catch (e) { flash('Error saving grade: ' + e.message); }
   };
 
@@ -920,7 +976,7 @@ function GradesView({ testId, tests, onBack, onSave, flash }) {
                 <strong>Q{i + 1}: {q.text}</strong>
                 <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", fontSize: "0.85rem" }}>
                   <input type="number" min="0" max={q.points} value={score}
-                    onChange={e => gradeManually(detail, i, Number(e.target.value))}
+                    onChange={e => gradeManually(detail, i, Number(e.target.value), detailIndex)}
                     style={{ width: "50px", ...S.input, padding: "0.3rem 0.5rem" }} />
                   <span style={{ color: "var(--muted)" }}>/ {q.points} pts</span>
                 </div>
@@ -1013,6 +1069,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
   const [currentQ, setCurrentQ] = useState(0);
   const [answers, setAnswers] = useState(Array(test.questions.length).fill(null).map(() => ({ value: null })));
   const [finished, setFinished] = useState(false);
+  const finishedRef = useRef(false);
   const [result, setResult] = useState(null);
   const [showDropdown, setShowDropdown] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -1029,14 +1086,14 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
   // Invalidate on visibility change (tab switch / background)
   useEffect(() => {
     const handleVisibility = () => {
-      if (document.hidden && !finished && !invalidatedRef.current) {
+      if (document.hidden && !finishedRef.current && !invalidatedRef.current) {
         invalidatedRef.current = true;
         handleInvalidate();
       }
     };
     document.addEventListener("visibilitychange", handleVisibility);
     return () => document.removeEventListener("visibilitychange", handleVisibility);
-  }, [finished]);
+  }, []);
 
   const setAnswer = (val) => {
     setAnswers(prev => prev.map((a, i) => i === currentQ ? { value: val } : a));
@@ -1081,6 +1138,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
     } catch (e) {
       setResult({ totalScore, totalPoints, percentage, graded });
     }
+    finishedRef.current = true;
     setFinished(true);
   };
 
@@ -1600,12 +1658,12 @@ function FlashcardLogin({ onEnter, onBack }) {
 // FLASHCARD STUDY EXPERIENCE (Student)
 // ═══════════════════════════════════════════════════════════════════════════════
 function FlashcardStudy({ deck, email, onDone }) {
+  const safeCards = deck?.cards || [];
   const [cardIndex, setCardIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [showHint, setShowHint] = useState(false);
   const [known, setKnown] = useState(new Set());
   const [stillLearning, setStillLearning] = useState(new Set());
-  const safeCards = deck?.cards || [];
   const [shuffled, setShuffled] = useState(() => safeCards.map((_, i) => i));
   const [mode, setMode] = useState("study");
 
@@ -1809,7 +1867,7 @@ function App() {
     if (token) {
       apiFetch('/auth/me').then(data => {
         setTeacher(data.teacher);
-        setScreen('teacher-dash');
+        setScreenState('teacher-dash');
       }).catch(() => {
         localStorage.removeItem('qt_token');
       });
