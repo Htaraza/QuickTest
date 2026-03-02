@@ -45,7 +45,235 @@ const generateId = () => Math.random().toString(36).substring(2, 12);
 // ─── API Client ──────────────────────────────────────────────────────────────
 const API_BASE = window.QT_API_BASE || '/api';
 
+// ─── MOCK BACKEND (activates automatically when no server is reachable) ───────
+const _mockDB = {
+  get: (key, def) => { try { return JSON.parse(localStorage.getItem('qt_mock_' + key)) ?? def; } catch { return def; } },
+  set: (key, val) => { localStorage.setItem('qt_mock_' + key, JSON.stringify(val)); return val; },
+};
+
+function _mockHandler(path, options) {
+  const method = (options.method || 'GET').toUpperCase();
+  const body = options.body || {};
+  const token = localStorage.getItem('qt_token');
+
+  // Decode current teacher from token
+  const getCurrentTeacher = () => {
+    if (!token) return null;
+    try { return JSON.parse(atob(token.split('.')[1])); } catch { return null; }
+  };
+  const makeToken = (teacher) => {
+    const payload = btoa(JSON.stringify({ id: teacher.id, email: teacher.email, name: teacher.name }));
+    return `mock.${payload}.sig`;
+  };
+
+  // ── Auth ──
+  if (path === '/auth/register' && method === 'POST') {
+    const teachers = _mockDB.get('teachers', []);
+    if (teachers.find(t => t.email === body.email)) throw new Error('Email already registered.');
+    const teacher = { id: generateId(), name: body.name, email: body.email, password: body.password };
+    _mockDB.set('teachers', [...teachers, teacher]);
+    return { token: makeToken(teacher), teacher: { id: teacher.id, name: teacher.name, email: teacher.email } };
+  }
+  if (path === '/auth/login' && method === 'POST') {
+    const teachers = _mockDB.get('teachers', []);
+    const teacher = teachers.find(t => t.email === body.email && t.password === body.password);
+    if (!teacher) throw new Error('Invalid email or password.');
+    return { token: makeToken(teacher), teacher: { id: teacher.id, name: teacher.name, email: teacher.email } };
+  }
+  if (path === '/auth/me' && method === 'GET') {
+    const me = getCurrentTeacher();
+    if (!me) throw new Error('Unauthorized');
+    return { teacher: me };
+  }
+  if (path === '/auth/forgot-password' && method === 'POST') {
+    // In mock mode just silently succeed — no email can be sent
+    return { ok: true };
+  }
+  if (path === '/auth/reset-password' && method === 'POST') {
+    throw new Error('Password reset requires a live server. In demo mode, please register a new account.');
+  }
+
+  // ── Tests ──
+  const me = getCurrentTeacher();
+  const teacherId = me?.id || 'demo';
+
+  if (path === '/tests' && method === 'GET') {
+    const tests = _mockDB.get(`tests_${teacherId}`, []);
+    return { tests };
+  }
+  if (path === '/tests' && method === 'POST') {
+    const tests = _mockDB.get(`tests_${teacherId}`, []);
+    const test = { ...body, id: generateId(), createdAt: Date.now(), updatedAt: Date.now() };
+    _mockDB.set(`tests_${teacherId}`, [test, ...tests]);
+    return { test };
+  }
+  const testEditMatch = path.match(/^\/tests\/([^/]+)$/);
+  if (testEditMatch && method === 'PUT') {
+    const id = testEditMatch[1];
+    const tests = _mockDB.get(`tests_${teacherId}`, []);
+    const test = { ...body, id, updatedAt: Date.now() };
+    _mockDB.set(`tests_${teacherId}`, tests.map(t => t.id === id ? test : t));
+    return { test };
+  }
+  if (testEditMatch && method === 'DELETE') {
+    const id = testEditMatch[1];
+    const tests = _mockDB.get(`tests_${teacherId}`, []);
+    _mockDB.set(`tests_${teacherId}`, tests.filter(t => t.id !== id));
+    return { ok: true };
+  }
+  const byCodeMatch = path.match(/^\/tests\/by-code\/([^/]+)$/);
+  if (byCodeMatch && method === 'GET') {
+    const code = byCodeMatch[1];
+    // Search all teachers' tests
+    const allKeys = Object.keys(localStorage).filter(k => k.startsWith('qt_mock_tests_'));
+    for (const key of allKeys) {
+      try {
+        const tests = JSON.parse(localStorage.getItem(key)) || [];
+        const test = tests.find(t => t.code === code && t.status === 'active');
+        if (test) return { test };
+      } catch {}
+    }
+    throw new Error('Invalid or inactive test code.');
+  }
+
+  // ── Decks ──
+  if (path === '/decks' && method === 'GET') {
+    return { decks: _mockDB.get(`decks_${teacherId}`, []) };
+  }
+  if (path === '/decks' && method === 'POST') {
+    const decks = _mockDB.get(`decks_${teacherId}`, []);
+    const deck = { ...body, id: generateId(), createdAt: Date.now(), updatedAt: Date.now() };
+    _mockDB.set(`decks_${teacherId}`, [deck, ...decks]);
+    return { deck };
+  }
+  const deckEditMatch = path.match(/^\/decks\/([^/]+)$/);
+  if (deckEditMatch && method === 'PUT') {
+    const id = deckEditMatch[1];
+    const decks = _mockDB.get(`decks_${teacherId}`, []);
+    const deck = { ...body, id, updatedAt: Date.now() };
+    _mockDB.set(`decks_${teacherId}`, decks.map(d => d.id === id ? deck : d));
+    return { deck };
+  }
+  if (deckEditMatch && method === 'DELETE') {
+    const id = deckEditMatch[1];
+    _mockDB.set(`decks_${teacherId}`, _mockDB.get(`decks_${teacherId}`, []).filter(d => d.id !== id));
+    return { ok: true };
+  }
+  const deckByCodeMatch = path.match(/^\/decks\/by-code\/([^/]+)$/);
+  if (deckByCodeMatch && method === 'GET') {
+    const code = deckByCodeMatch[1];
+    const allKeys = Object.keys(localStorage).filter(k => k.startsWith('qt_mock_decks_'));
+    for (const key of allKeys) {
+      try {
+        const decks = JSON.parse(localStorage.getItem(key)) || [];
+        const deck = decks.find(d => d.code === code && d.status === 'active');
+        if (deck) return { deck };
+      } catch {}
+    }
+    throw new Error('Invalid or inactive deck code.');
+  }
+
+  // ── Submissions ──
+  if (path === '/submissions' && method === 'POST') {
+    const subs = _mockDB.get('submissions', []);
+    // Invalidation submission
+    if (body.invalidated) {
+      const sub = { id: generateId(), testId: body.testId, email: body.studentEmail, answers: [], totalScore: 0, totalPoints: 0, percentage: 0, invalidated: true, submittedAt: Date.now() };
+      _mockDB.set('submissions', [...subs, sub]);
+      return sub;
+    }
+    // Find the test to get totalPoints
+    const allTestKeys = Object.keys(localStorage).filter(k => k.startsWith('qt_mock_tests_'));
+    let foundTest = null;
+    for (const key of allTestKeys) {
+      try { const tests = JSON.parse(localStorage.getItem(key)) || []; foundTest = tests.find(t => t.id === body.testId); if (foundTest) break; } catch {}
+    }
+    const totalPoints = foundTest ? foundTest.questions.reduce((s, q) => s + (q.points || 0), 0) : 0;
+    const totalScore = (body.answers || []).reduce((s, a) => s + (a.autoScore || 0), 0);
+    const percentage = totalPoints > 0 ? Math.round((totalScore / totalPoints) * 100) : 0;
+    const sub = { id: generateId(), testId: body.testId, email: body.studentEmail, answers: body.answers || [], totalScore, totalPoints, percentage, invalidated: false, submittedAt: Date.now() };
+    _mockDB.set('submissions', [...subs, sub]);
+    return { totalScore, totalPoints, percentage, answers: sub.answers };
+  }
+  const subTestMatch = path.match(/^\/submissions\/test\/([^/]+)$/);
+  if (subTestMatch && method === 'GET') {
+    const testId = subTestMatch[1];
+    const subs = _mockDB.get('submissions', []).filter(s => s.testId === testId);
+    return { submissions: subs };
+  }
+  const subCheckMatch = path.match(/^\/submissions\/check/);
+  if (subCheckMatch && method === 'GET') {
+    const params = new URLSearchParams(path.split('?')[1] || '');
+    const testId = params.get('testId');
+    const email = params.get('email');
+    const subs = _mockDB.get('submissions', []);
+    const existing = subs.find(s => s.testId === testId && s.email === email);
+    return { exists: !!existing, retakeAllowed: existing?.retakeAllowed || false };
+  }
+  const retakeMatch = path.match(/^\/submissions\/([^/]+)\/retake$/);
+  if (retakeMatch && method === 'PATCH') {
+    const id = retakeMatch[1];
+    const subs = _mockDB.get('submissions', []);
+    _mockDB.set('submissions', subs.map(s => s.id === id ? { ...s, retakeAllowed: true } : s));
+    return { ok: true };
+  }
+  const gradeMatch = path.match(/^\/submissions\/([^/]+)\/grade$/);
+  if (gradeMatch && method === 'PATCH') {
+    const id = gradeMatch[1];
+    const subs = _mockDB.get('submissions', []);
+    const sub = subs.find(s => s.id === id);
+    if (!sub) throw new Error('Submission not found');
+    const answers = [...(sub.answers || [])];
+    answers[body.questionIndex] = { ...answers[body.questionIndex], manualScore: body.score };
+    const totalScore = answers.reduce((s, a) => s + (a.manualScore !== undefined ? a.manualScore : (a.autoScore || 0)), 0);
+    const percentage = sub.totalPoints > 0 ? Math.round((totalScore / sub.totalPoints) * 100) : 0;
+    const updated = { ...sub, answers, totalScore, percentage };
+    _mockDB.set('submissions', subs.map(s => s.id === id ? updated : s));
+    return { answers, totalScore, percentage };
+  }
+
+  throw new Error(`Mock: unhandled ${method} ${path}`);
+}
+
+// Track if we've confirmed the server is unreachable to skip retrying every call
+let _mockMode = null; // null = unknown, true = mock, false = real server
+
 async function apiFetch(path, options = {}) {
+  // If we already confirmed server is live, go straight to real fetch
+  if (_mockMode === false) {
+    return _realFetch(path, options);
+  }
+  // If we already confirmed mock mode, use mock directly
+  if (_mockMode === true) {
+    return new Promise((resolve, reject) => {
+      setTimeout(() => {
+        try { resolve(_mockHandler(path, options)); }
+        catch (e) { reject(e); }
+      }, 60); // small delay to feel realistic
+    });
+  }
+  // Unknown — try real server first
+  try {
+    const result = await _realFetch(path, options);
+    _mockMode = false; // server responded — stay in real mode
+    return result;
+  } catch (e) {
+    // If it's a network error (no server), switch to mock mode permanently
+    if (e instanceof TypeError && e.message.includes('fetch')) {
+      _mockMode = true;
+      console.info('[QuickTest] No server detected — running in demo mode with localStorage.');
+      return new Promise((resolve, reject) => {
+        setTimeout(() => {
+          try { resolve(_mockHandler(path, options)); }
+          catch (me) { reject(me); }
+        }, 60);
+      });
+    }
+    throw e; // Real HTTP error (4xx/5xx) — pass through as normal
+  }
+}
+
+async function _realFetch(path, options = {}) {
   const token = localStorage.getItem('qt_token');
   const res = await fetch(API_BASE + path, {
     ...options,
@@ -285,7 +513,7 @@ function Landing({ onTeacher, onStudent, onFlashcards }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // TEACHER LOGIN
 // ═══════════════════════════════════════════════════════════════════════════════
-function TeacherLogin({ onLogin, onBack, onRegister }) {
+function TeacherLogin({ onLogin, onBack, onRegister, onForgotPassword }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
@@ -315,7 +543,16 @@ function TeacherLogin({ onLogin, onBack, onRegister }) {
           <input style={S.input} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="teacher@school.edu" />
         </div>
         <div style={S.fieldGroup}>
-          <label style={S.label}>Password</label>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.4rem" }}>
+            <label style={S.label}>Password</label>
+            <button
+              type="button"
+              onClick={onForgotPassword}
+              style={{ background: "none", border: "none", color: "var(--accent)", fontSize: "0.8rem", cursor: "pointer", fontWeight: 600, padding: 0 }}
+            >
+              Forgot password?
+            </button>
+          </div>
           <input style={S.input} type="password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLogin()} placeholder="••••••••" />
         </div>
         <button onClick={handleLogin} disabled={loading} style={{ ...S.btn, ...S.btnPrimary, width: "100%" }}>{loading ? "Signing in..." : "Sign In"}</button>
@@ -332,7 +569,7 @@ function TeacherLogin({ onLogin, onBack, onRegister }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // TEACHER REGISTER
 // ═══════════════════════════════════════════════════════════════════════════════
-function TeacherRegister({ onLogin, onBack }) {
+function TeacherRegister({ onLogin, onBack, onForgotPassword }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -380,6 +617,12 @@ function TeacherRegister({ onLogin, onBack }) {
         <button onClick={handleRegister} disabled={loading} style={{ ...S.btn, ...S.btnPrimary, width: "100%" }}>
           {loading ? "Creating account..." : "Create Account"}
         </button>
+        <div style={{ textAlign: "center", marginTop: "1.25rem" }}>
+          <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>Already have an account? </span>
+          <button onClick={onBack} style={{ background: "none", border: "none", color: "var(--ink)", fontSize: "0.85rem", fontWeight: 600, cursor: "pointer", textDecoration: "underline" }}>Sign in</button>
+          <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}> · </span>
+          <button onClick={onForgotPassword} style={{ background: "none", border: "none", color: "var(--accent)", fontSize: "0.85rem", fontWeight: 600, cursor: "pointer" }}>Forgot password?</button>
+        </div>
       </div>
     </div>
   );
@@ -450,6 +693,7 @@ function TeacherDashboard({ teacher, onLogout }) {
   const [decks, setDecks] = useState([]);
   const [editingTest, setEditingTest] = useState(null);
   const [editingDeck, setEditingDeck] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const setView = (newView) => {
     window.history.pushState({ screen: "teacher-dash", view: newView }, "", "");
@@ -522,28 +766,70 @@ function TeacherDashboard({ teacher, onLogout }) {
 
   return (
     <div style={S.dashWrap}>
-      <div style={S.sidebar}>
-        <h2 style={S.sidebarTitle}>QuickTest</h2>
-        <div style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: "0.75rem" }}>{teacher.name || teacher.email}</div>
-        <div style={{ height: "1px", background: "rgba(255,255,255,0.08)", marginBottom: "0.75rem" }} />
-        <div style={{ fontSize: "0.7rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(247,244,239,0.3)", padding: "0 1rem", marginBottom: "0.3rem" }}>Tests</div>
-        {[{ id: "tests", icon: "📋", label: "My Tests" }, { id: "create", icon: "✏️", label: "Create Test" }].map(n => (
-          <div key={n.id} style={{ ...S.navItem, ...(view === n.id || (view === "edit" && n.id === "create") ? S.navItemActive : {}) }}
-            onClick={() => { setView(n.id); if (n.id === "create") setEditingTest(null); }}>
-            {n.icon} {n.label}
+      {/* Sidebar */}
+      <div style={{
+        ...S.sidebar,
+        width: sidebarOpen ? "240px" : "56px",
+        overflow: "hidden",
+        transition: "width 0.25s ease",
+        position: "relative",
+        minHeight: "100vh"
+      }}>
+        {/* Toggle button */}
+        <button onClick={() => setSidebarOpen(o => !o)} style={{
+          position: "absolute", top: "1rem", right: "0.6rem",
+          background: "rgba(255,255,255,0.1)", border: "none", borderRadius: "6px",
+          color: "var(--paper)", cursor: "pointer", fontSize: "0.9rem",
+          padding: "0.3rem 0.45rem", zIndex: 10, flexShrink: 0
+        }} title={sidebarOpen ? "Collapse menu" : "Expand menu"}>
+          {sidebarOpen ? "◀" : "▶"}
+        </button>
+
+        {sidebarOpen ? (
+          <>
+            <h2 style={S.sidebarTitle}>QuickTest</h2>
+            <div style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: "0.75rem" }}>{teacher.name || teacher.email}</div>
+            <div style={{ height: "1px", background: "rgba(255,255,255,0.08)", marginBottom: "0.75rem" }} />
+            <div style={{ fontSize: "0.7rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(247,244,239,0.3)", padding: "0 1rem", marginBottom: "0.3rem" }}>Tests</div>
+            {[{ id: "tests", icon: "📋", label: "My Tests" }, { id: "create", icon: "✏️", label: "Create Test" }].map(n => (
+              <div key={n.id} style={{ ...S.navItem, ...(view === n.id || (view === "edit" && n.id === "create") ? S.navItemActive : {}) }}
+                onClick={() => { setView(n.id); if (n.id === "create") setEditingTest(null); }}>
+                {n.icon} {n.label}
+              </div>
+            ))}
+            <div style={{ height: "1px", background: "rgba(255,255,255,0.08)", margin: "0.75rem 0 0.5rem" }} />
+            <div style={{ fontSize: "0.7rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(247,244,239,0.3)", padding: "0 1rem", marginBottom: "0.3rem" }}>Flashcards</div>
+            {[{ id: "decks", icon: "🃏", label: "My Decks" }, { id: "create-deck", icon: "➕", label: "Create Deck" }].map(n => (
+              <div key={n.id} style={{ ...S.navItem, ...(view === n.id || (view === "edit-deck" && n.id === "create-deck") ? S.navItemActive : {}) }}
+                onClick={() => { setView(n.id); if (n.id === "create-deck") setEditingDeck(null); }}>
+                {n.icon} {n.label}
+              </div>
+            ))}
+            <div style={{ marginTop: "auto" }}>
+              <div style={{ ...S.navItem }} onClick={onLogout}>🚪 Log Out</div>
+            </div>
+          </>
+        ) : (
+          /* Collapsed: show icons only */
+          <div style={{ paddingTop: "3rem", display: "flex", flexDirection: "column", alignItems: "center", gap: "0.5rem" }}>
+            {[
+              { id: "tests", icon: "📋", matchViews: ["tests"] },
+              { id: "create", icon: "✏️", matchViews: ["create", "edit"] },
+              { id: "decks", icon: "🃏", matchViews: ["decks"] },
+              { id: "create-deck", icon: "➕", matchViews: ["create-deck", "edit-deck"] }
+            ].map(n => (
+              <div key={n.id}
+                title={n.id}
+                style={{ ...S.navItem, ...(n.matchViews.includes(view) ? S.navItemActive : {}), justifyContent: "center", padding: "0.65rem", borderRadius: "8px", width: "40px", fontSize: "1.1rem" }}
+                onClick={() => { setView(n.id); if (n.id === "create") setEditingTest(null); if (n.id === "create-deck") setEditingDeck(null); }}>
+                {n.icon}
+              </div>
+            ))}
+            <div style={{ marginTop: "auto", paddingTop: "1rem" }}>
+              <div style={{ ...S.navItem, justifyContent: "center", padding: "0.65rem", width: "40px", fontSize: "1.1rem" }} onClick={onLogout} title="Log Out">🚪</div>
+            </div>
           </div>
-        ))}
-        <div style={{ height: "1px", background: "rgba(255,255,255,0.08)", margin: "0.75rem 0 0.5rem" }} />
-        <div style={{ fontSize: "0.7rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(247,244,239,0.3)", padding: "0 1rem", marginBottom: "0.3rem" }}>Flashcards</div>
-        {[{ id: "decks", icon: "🃏", label: "My Decks" }, { id: "create-deck", icon: "➕", label: "Create Deck" }].map(n => (
-          <div key={n.id} style={{ ...S.navItem, ...(view === n.id || (view === "edit-deck" && n.id === "create-deck") ? S.navItemActive : {}) }}
-            onClick={() => { setView(n.id); if (n.id === "create-deck") setEditingDeck(null); }}>
-            {n.icon} {n.label}
-          </div>
-        ))}
-        <div style={{ marginTop: "auto" }}>
-          <div style={{ ...S.navItem }} onClick={onLogout}>🚪 Log Out</div>
-        </div>
+        )}
       </div>
       <div style={S.main}>
         {msg && <div style={{ ...S.success, position: "fixed", top: "1rem", right: "1rem", zIndex: 999 }}>{msg}</div>}
@@ -621,6 +907,7 @@ function TestBuilder({ test, onSave, onCancel }) {
   const [title, setTitle] = useState(test?.title || "");
   const [description, setDescription] = useState(test?.description || "");
   const [inApp, setInApp] = useState(test?.inApp !== false);
+  const [allowCalculator, setAllowCalculator] = useState(test?.allowCalculator || false);
   const [questions, setQuestions] = useState(test?.questions || []);
   const [err, setErr] = useState("");
   const [showPaste, setShowPaste] = useState(false);
@@ -652,7 +939,7 @@ function TestBuilder({ test, onSave, onCancel }) {
     if (!importSelected) return;
     const srcTest = importTests.find(t => t.id === importSelected);
     if (!srcTest) return;
-    const toAdd = srcTest.questions.filter((_, i) => importChecked.has(i));
+    const toAdd = srcTest.questions.filter((_, i) => importChecked.has(i)).map(q => ({ ...q, id: generateId() }));
     setQuestions(prev => [...prev, ...toAdd]);
     setShowImport(false);
     setImportSelected(null);
@@ -704,7 +991,7 @@ function TestBuilder({ test, onSave, onCancel }) {
       return;
     }
 
-    setQuestions(prev => [...prev, ...parsed]);
+    setQuestions(prev => [...prev, ...parsed.map(q => ({ ...q, id: generateId() }))]);
     setPasteText("");
     setShowPaste(false);
     setPasteErr("");
@@ -714,7 +1001,7 @@ function TestBuilder({ test, onSave, onCancel }) {
     setQuestions([...questions, {
       id: generateId(), type,
       text: "", points: 1,
-      options: type === "essay" ? [] : ["", ""],
+      options: type === "essay" || type === "math" ? [] : ["", ""],
       correctAnswers: [],
       required: true
     }]);
@@ -748,7 +1035,8 @@ function TestBuilder({ test, onSave, onCancel }) {
       title: title.trim(),
       description: description.trim(),
       inApp,
-      questions: questions.map(({ id, ...rest }) => rest),
+      allowCalculator,
+      questions: questions,
       code: test?.code || generateCode(),
       status: test?.status || "draft",
       createdAt: test?.createdAt || Date.now(),
@@ -780,13 +1068,20 @@ function TestBuilder({ test, onSave, onCancel }) {
           <label style={S.label}>Description / Instructions</label>
           <textarea style={S.textarea} value={description} onChange={e => setDescription(e.target.value)} placeholder="Any instructions for students..." />
         </div>
-        <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: "1rem", alignItems: "center", flexWrap: "wrap" }}>
           <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}>
             <input type="checkbox" checked={inApp} onChange={e => setInApp(e.target.checked)} />
             <span style={{ fontSize: "0.9rem" }}>Students complete in-app</span>
           </label>
           <span style={{ color: "var(--muted)", fontSize: "0.85rem" }}>
             {inApp ? "App will grade automatically" : "Print/paper — questions shown on screen, answers on paper"}
+          </span>
+          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer", marginLeft: "0.5rem" }}>
+            <input type="checkbox" checked={allowCalculator} onChange={e => setAllowCalculator(e.target.checked)} />
+            <span style={{ fontSize: "0.9rem" }}>🧮 Allow calculator</span>
+          </label>
+          <span style={{ color: "var(--muted)", fontSize: "0.85rem" }}>
+            {allowCalculator ? "Scientific calculator available to students" : "No calculator access"}
           </span>
         </div>
       </div>
@@ -898,9 +1193,10 @@ function TestBuilder({ test, onSave, onCancel }) {
             { type: "true_false", label: "True / False", icon: "✅" },
             { type: "short_answer", label: "Short Answer", icon: "📝" },
             { type: "essay", label: "Essay", icon: "📄" },
+            { type: "math", label: "Math", icon: "🔢" },
           ].map(t => (
             <button key={t.type} onClick={() => addQuestion(t.type)}
-              style={{ ...S.btn, ...S.btnGhost, fontSize: "0.85rem" }}>
+              style={{ ...S.btn, ...(t.type === "math" ? { background: "#e8f4fd", color: "#1a6fa8", border: "1.5px solid #b8d9f0" } : S.btnGhost), fontSize: "0.85rem" }}>
               {t.icon} {t.label}
             </button>
           ))}
@@ -910,8 +1206,266 @@ function TestBuilder({ test, onSave, onCancel }) {
   );
 }
 
+// ─── MATH SYMBOL PICKER ──────────────────────────────────────────────────────
+const MATH_SYMBOLS = [
+  { group: "Basic", symbols: ["+", "−", "×", "÷", "=", "≠", "<", ">", "≤", "≥", "±", "∓"] },
+  { group: "Algebra", symbols: ["x", "y", "z", "n", "a", "b", "²", "³", "ⁿ", "√", "∛", "∜"] },
+  { group: "Fractions", symbols: ["½", "⅓", "¼", "¾", "⅔", "⅛", "⅜", "⅝", "⅞", "/", "(", ")"] },
+  { group: "Calc / Trig", symbols: ["π", "∞", "θ", "α", "β", "γ", "Δ", "∑", "∫", "∂", "°", "′"] },
+  { group: "Sets / Logic", symbols: ["∈", "∉", "⊂", "⊃", "∪", "∩", "∅", "∀", "∃", "→", "↔", "¬"] },
+];
+
+function MathSymbolPicker({ onInsert }) {
+  const [open, setOpen] = useState(false);
+  const [activeGroup, setActiveGroup] = useState(MATH_SYMBOLS[0].group);
+  const group = MATH_SYMBOLS.find(g => g.group === activeGroup);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+  return (
+    <div ref={wrapRef} style={{ position: "relative", display: "inline-block" }}>
+      <button type="button" onClick={() => setOpen(o => !o)}
+        style={{ ...S.btn, background: "#e8f4fd", color: "#1a6fa8", border: "1.5px solid #b8d9f0", fontSize: "0.82rem", padding: "0.35rem 0.8rem" }}>
+        ∑ Insert Symbol
+      </button>
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 200, background: "#fff", border: "1.5px solid var(--border)", borderRadius: "12px", boxShadow: "0 8px 32px rgba(0,0,0,0.14)", padding: "0.75rem", minWidth: "320px" }}>
+          <div style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap", marginBottom: "0.6rem" }}>
+            {MATH_SYMBOLS.map(g => (
+              <button key={g.group} type="button" onClick={() => setActiveGroup(g.group)}
+                style={{ fontSize: "0.75rem", padding: "0.2rem 0.55rem", borderRadius: "6px", border: "1px solid var(--border)", cursor: "pointer", background: activeGroup === g.group ? "var(--ink)" : "var(--cream)", color: activeGroup === g.group ? "var(--paper)" : "var(--ink)", fontWeight: 600 }}>
+                {g.group}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
+            {group.symbols.map(sym => (
+              <button key={sym} type="button" onClick={() => { onInsert(sym); }}
+                style={{ fontSize: "1.1rem", padding: "0.3rem 0.45rem", borderRadius: "6px", border: "1px solid var(--border)", cursor: "pointer", background: "var(--cream)", minWidth: "36px", textAlign: "center" }}>
+                {sym}
+              </button>
+            ))}
+          </div>
+          <button type="button" onClick={() => setOpen(false)} style={{ marginTop: "0.5rem", fontSize: "0.75rem", background: "none", border: "none", cursor: "pointer", color: "var(--muted)" }}>Close ✕</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MathQuestionEditor({ q, onChange, inApp }) {
+  const textRef = useRef(null);
+  const answerRef = useRef(null);
+  const [focusedField, setFocusedField] = useState("question"); // "question" | "answer"
+
+  const insertSymbol = (sym) => {
+    const ref = focusedField === "answer" ? answerRef : textRef;
+    if (!ref.current) { onChange({ text: q.text + sym }); return; }
+    const el = ref.current;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    if (focusedField === "answer") {
+      const cur = q.correctAnswers?.[0] || "";
+      const newVal = cur.slice(0, start) + sym + cur.slice(end);
+      onChange({ correctAnswers: [newVal] });
+    } else {
+      const newVal = q.text.slice(0, start) + sym + q.text.slice(end);
+      onChange({ text: newVal });
+    }
+    setTimeout(() => { el.focus(); el.setSelectionRange(start + sym.length, start + sym.length); }, 10);
+  };
+
+  return (
+    <div style={{ marginTop: "0.5rem" }}>
+      <div style={{ background: "#f0f7ff", border: "1.5px solid #b8d9f0", borderRadius: "8px", padding: "0.6rem 0.8rem", marginBottom: "0.75rem", fontSize: "0.82rem", color: "#1a6fa8" }}>
+        🔢 Math Question — Use the symbol picker to insert math symbols. Students will see a scientific calculator (if enabled).
+      </div>
+      <div style={S.fieldGroup}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.4rem" }}>
+          <label style={S.label}>Question (math expression / word problem)</label>
+          <MathSymbolPicker onInsert={insertSymbol} />
+        </div>
+        <textarea
+          ref={textRef}
+          style={{ ...S.textarea, minHeight: "70px", fontFamily: "monospace", fontSize: "1rem" }}
+          value={q.text}
+          onChange={e => onChange({ text: e.target.value })}
+          onFocus={() => setFocusedField("question")}
+          placeholder="e.g.  Solve for x:  3x + 7 = 22"
+        />
+      </div>
+      {inApp && (
+        <div style={S.fieldGroup}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.4rem" }}>
+            <label style={S.label}>Correct Answer (accepted, case-insensitive)</label>
+          </div>
+          <input
+            ref={answerRef}
+            style={{ ...S.input, fontFamily: "monospace" }}
+            value={q.correctAnswers?.[0] || ""}
+            onFocus={() => setFocusedField("answer")}
+            onChange={e => onChange({ correctAnswers: [e.target.value] })}
+            placeholder="e.g.  5  or  x = 5"
+          />
+          <p style={{ fontSize: "0.78rem", color: "var(--muted)", marginTop: "0.3rem" }}>Students must enter an exact match. Leave blank for manual grading.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── SCIENTIFIC CALCULATOR ────────────────────────────────────────────────────
+function ScientificCalculator({ onClose }) {
+  const [display, setDisplay] = useState("0");
+  const [expr, setExpr] = useState("");
+  const [justEvaluated, setJustEvaluated] = useState(false);
+  const [mem, setMem] = useState(0);
+  const [deg, setDeg] = useState(true); // degrees vs radians
+
+  const press = (val) => {
+    if (val === "C") { setDisplay("0"); setExpr(""); setJustEvaluated(false); return; }
+    if (val === "⌫") {
+      if (justEvaluated) { setDisplay("0"); setExpr(""); setJustEvaluated(false); return; }
+      const nd = display.length > 1 ? display.slice(0, -1) : "0";
+      setDisplay(nd);
+      setExpr(prev => prev.slice(0, -1));
+      return;
+    }
+    if (val === "=") {
+      try {
+        // Replace display symbols with JS eval-able ones
+        // Replace 'e' constant ONLY when standalone (not inside function names)
+        let evalExpr = expr
+          .replace(/×/g, "*").replace(/÷/g, "/").replace(/−/g, "-")
+          .replace(/π/g, `(${Math.PI})`)
+          .replace(/\be\b/g, `(${Math.E})`)
+          .replace(/sin\(/g, `Math.sin(toRad(`).replace(/cos\(/g, `Math.cos(toRad(`).replace(/tan\(/g, `Math.tan(toRad(`)
+          .replace(/√\(/g, `Math.sqrt(`).replace(/log\(/g, `Math.log10(`).replace(/ln\(/g, `Math.log(`)
+          .replace(/\^/g, "**").replace(/abs\(/g, `Math.abs(`);
+        // close extra parens from trig injection
+        const extraClose = (evalExpr.match(/toRad\(/g) || []).length;
+        evalExpr += ")".repeat(extraClose);
+        // eslint-disable-next-line no-new-func
+        const result = Function(`"use strict"; const toRad = (x) => ${deg} ? x * Math.PI / 180 : x; return (${evalExpr})`)();
+        const res = isFinite(result) ? (Number.isInteger(result) ? String(result) : parseFloat(result.toFixed(10)).toString()) : "Error";
+        setDisplay(res);
+        setExpr(res);
+        setJustEvaluated(true);
+      } catch { setDisplay("Error"); setExpr(""); setJustEvaluated(true); }
+      return;
+    }
+    if (val === "M+") { setMem(m => m + parseFloat(display || 0)); return; }
+    if (val === "MR") { const mv = String(mem); setDisplay(mv); setExpr(prev => justEvaluated ? mv : prev + mv); setJustEvaluated(false); return; }
+    if (val === "MC") { setMem(0); return; }
+    if (val === "±") { const n = parseFloat(display) * -1; const s = String(n); setDisplay(s); setExpr(prev => { const p = justEvaluated ? "" : prev; return p.slice(0, -display.length) + s; }); return; }
+    if (val === "%") { const n = parseFloat(display) / 100; const s = String(n); setDisplay(s); setExpr(prev => justEvaluated ? s : prev.slice(0, -display.length) + s); setJustEvaluated(false); return; }
+
+    // Functions that need an opening paren
+    const funcKeys = ["sin", "cos", "tan", "√", "log", "ln", "abs"];
+    if (funcKeys.includes(val)) {
+      const token = val + "(";
+      if (justEvaluated) { setDisplay(token); setExpr(token); setJustEvaluated(false); }
+      else { setDisplay(display + token); setExpr(prev => prev + token); }
+      return;
+    }
+    if (val === "x²") { const token = "^2"; setDisplay(display + token); setExpr(prev => (justEvaluated ? display : prev) + "^2"); setJustEvaluated(false); return; }
+    if (val === "xʸ") { const token = "^"; setDisplay(display + "^"); setExpr(prev => (justEvaluated ? display : prev) + "^"); setJustEvaluated(false); return; }
+    if (val === "1/x") { const n = 1 / parseFloat(display); setDisplay(String(n)); setExpr(String(n)); setJustEvaluated(true); return; }
+    if (val === "DEG" || val === "RAD") { setDeg(d => !d); return; }
+
+    const isOp = ["+", "−", "×", "÷", "(", ")", "."].includes(val);
+    if (justEvaluated && !isOp) {
+      setDisplay(val); setExpr(val); setJustEvaluated(false);
+    } else if (justEvaluated && isOp) {
+      setDisplay(display + val); setExpr(display + val); setJustEvaluated(false);
+    } else {
+      const newDisplay = display === "0" && !isOp ? val : display + val;
+      setDisplay(newDisplay);
+      setExpr(prev => prev + val);
+    }
+  };
+
+  const btnStyle = (bg, fg = "#fff") => ({
+    padding: "0.7rem 0.3rem", borderRadius: "8px", border: "none", cursor: "pointer",
+    fontSize: "0.9rem", fontWeight: 600, background: bg, color: fg,
+    transition: "opacity 0.1s", flex: 1, minWidth: 0
+  });
+
+  const rows = [
+    [
+      { l: deg ? "DEG" : "RAD", bg: "#3a3a4a", title: "Toggle degrees/radians" },
+      { l: "sin", bg: "#2d5a8e" }, { l: "cos", bg: "#2d5a8e" }, { l: "tan", bg: "#2d5a8e" },
+      { l: "π", bg: "#2d5a8e" },
+    ],
+    [
+      { l: "MC", bg: "#3a3a4a" }, { l: "MR", bg: "#3a3a4a" }, { l: "M+", bg: "#3a3a4a" },
+      { l: "√", bg: "#2d5a8e" }, { l: "x²", bg: "#2d5a8e" },
+    ],
+    [
+      { l: "xʸ", bg: "#2d5a8e" }, { l: "log", bg: "#2d5a8e" }, { l: "ln", bg: "#2d5a8e" },
+      { l: "abs", bg: "#2d5a8e" }, { l: "1/x", bg: "#2d5a8e" },
+    ],
+    [
+      { l: "(", bg: "#3a3a4a" }, { l: ")", bg: "#3a3a4a" },
+      { l: "%", bg: "#3a3a4a" }, { l: "±", bg: "#3a3a4a" }, { l: "C", bg: "#c84b31" },
+    ],
+    [
+      { l: "7", bg: "#1e1e2e" }, { l: "8", bg: "#1e1e2e" }, { l: "9", bg: "#1e1e2e" },
+      { l: "÷", bg: "#e87b1e" }, { l: "⌫", bg: "#3a3a4a" },
+    ],
+    [
+      { l: "4", bg: "#1e1e2e" }, { l: "5", bg: "#1e1e2e" }, { l: "6", bg: "#1e1e2e" },
+      { l: "×", bg: "#e87b1e" }, { l: "(", bg: "#3a3a4a", hide: true },
+    ],
+    [
+      { l: "1", bg: "#1e1e2e" }, { l: "2", bg: "#1e1e2e" }, { l: "3", bg: "#1e1e2e" },
+      { l: "−", bg: "#e87b1e" }, { l: ")", bg: "#3a3a4a", hide: true },
+    ],
+    [
+      { l: "0", bg: "#1e1e2e" }, { l: ".", bg: "#1e1e2e" }, { l: "e", bg: "#2d5a8e" },
+      { l: "+", bg: "#e87b1e" }, { l: "=", bg: "#2d6a4f" },
+    ],
+  ];
+
+  // Simplify rows 6 and 7 - remove hidden buttons and make remaining fill space
+  const cleanRows = rows.map(row => row.filter(b => !b.hide));
+
+  return (
+    <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 500, background: "#12121e", borderRadius: "20px 20px 0 0", boxShadow: "0 -8px 40px rgba(0,0,0,0.6)", paddingBottom: "env(safe-area-inset-bottom)" }}>
+      {/* Handle bar + header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.75rem 1rem 0.25rem" }}>
+        <span style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.75rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>🧮 Calculator</span>
+        <button onClick={onClose} style={{ background: "rgba(255,255,255,0.1)", border: "none", borderRadius: "20px", padding: "0.25rem 0.75rem", color: "#fff", cursor: "pointer", fontSize: "0.8rem" }}>Hide ↓</button>
+      </div>
+      {/* Display */}
+      <div style={{ padding: "0.25rem 1rem 0.5rem", textAlign: "right" }}>
+        <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.3)", minHeight: "1.2em", wordBreak: "break-all" }}>{expr || " "}</div>
+        <div style={{ fontSize: "2rem", color: "#fff", fontFamily: "monospace", fontWeight: 300, letterSpacing: "-0.02em", wordBreak: "break-all", lineHeight: 1.2 }}>{display}</div>
+      </div>
+      {/* Buttons */}
+      <div style={{ padding: "0 0.75rem 0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+        {cleanRows.map((row, ri) => (
+          <div key={ri} style={{ display: "flex", gap: "0.4rem" }}>
+            {row.map((btn, bi) => (
+              <button key={bi} onClick={() => press(btn.l)} title={btn.title}
+                style={btnStyle(btn.bg)}>
+                {btn.l}
+              </button>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const QuestionEditor = memo(function QuestionEditor({ q, idx, total, onChange, onRemove, onMove, inApp }) {
-  const typeLabels = { multiple_choice: "Multiple Choice", multiple_select: "Multiple Select", true_false: "True / False", short_answer: "Short Answer", essay: "Essay" };
+  const typeLabels = { multiple_choice: "Multiple Choice", multiple_select: "Multiple Select", true_false: "True / False", short_answer: "Short Answer", essay: "Essay", math: "Math Question" };
 
   const addOption = () => onChange({ options: [...q.options, ""] });
   const updateOption = (i, val) => onChange({ options: q.options.map((o, j) => j === i ? val : o) });
@@ -939,10 +1493,12 @@ const QuestionEditor = memo(function QuestionEditor({ q, idx, total, onChange, o
         </div>
       </div>
 
-      <div style={S.fieldGroup}>
-        <label style={S.label}>Question Text *</label>
-        <textarea style={{ ...S.textarea, minHeight: "70px" }} value={q.text} onChange={e => onChange({ text: e.target.value })} placeholder="Enter your question..." />
-      </div>
+      {q.type !== "math" && (
+        <div style={S.fieldGroup}>
+          <label style={S.label}>Question Text *</label>
+          <textarea style={{ ...S.textarea, minHeight: "70px" }} value={q.text} onChange={e => onChange({ text: e.target.value })} placeholder="Enter your question..." />
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start", flexWrap: "wrap" }}>
         <div style={{ flex: 1, minWidth: "80px" }}>
@@ -967,7 +1523,7 @@ const QuestionEditor = memo(function QuestionEditor({ q, idx, total, onChange, o
           ) : (
             <>
               {q.options.map((opt, i) => (
-                <div key={`opt-${i}-${opt}`} style={S.optionRow}>
+                <div key={`opt-${i}`} style={S.optionRow}>
                   {inApp && (
                     q.type === "multiple_choice"
                       ? <input type="radio" checked={q.correctAnswers?.includes(opt)} onChange={() => toggleCorrect(opt)} />
@@ -988,6 +1544,10 @@ const QuestionEditor = memo(function QuestionEditor({ q, idx, total, onChange, o
           <label style={S.label}>Accepted Answers (comma-separated, case-insensitive)</label>
           <input style={S.input} value={q.correctAnswers?.join(", ") || ""} onChange={e => onChange({ correctAnswers: e.target.value.split(",").map(a => a.trim()).filter(a => a.length > 0) })} placeholder="e.g. Paris, paris" />
         </div>
+      )}
+
+      {q.type === "math" && (
+        <MathQuestionEditor q={q} onChange={onChange} inApp={inApp} />
       )}
     </div>
   );
@@ -1073,8 +1633,8 @@ function GradesView({ testId, tests, onBack, flash }) {
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem" }}>
                 <strong>Q{i + 1}: {q.text}</strong>
                 <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", fontSize: "0.85rem" }}>
-                  <input type="number" min="0" max={q.points} value={score}
-                    onChange={e => gradeManually(detail, i, Number(e.target.value), detailIndex)}
+                  <input type="number" min="0" max={q.points} defaultValue={score}
+                    onBlur={e => { const v = Number(e.target.value); if (v !== score) gradeManually(detail, i, v, detailIndex); }}
                     style={{ width: "50px", ...S.input, padding: "0.3rem 0.5rem" }} />
                   <span style={{ color: "var(--muted)" }}>/ {q.points} pts</span>
                 </div>
@@ -1173,6 +1733,9 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
   const [showConfirm, setShowConfirm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const invalidatedRef = useRef(false);
+  const [showCalculator, setShowCalculator] = useState(false);
+  const hasMathQ = test.questions.some(q => q.type === "math");
+  const calculatorAllowed = test.allowCalculator || hasMathQ;
 
   const handleInvalidate = async () => {
     try {
@@ -1181,12 +1744,16 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
     onInvalidate();
   };
 
+  // Keep a ref to the latest handleInvalidate so the visibility effect never captures a stale closure
+  const handleInvalidateRef = useRef(handleInvalidate);
+  useEffect(() => { handleInvalidateRef.current = handleInvalidate; });
+
   // Invalidate on visibility change (tab switch / background)
   useEffect(() => {
     const handleVisibility = () => {
       if (document.hidden && !finishedRef.current && !invalidatedRef.current) {
         invalidatedRef.current = true;
-        handleInvalidate();
+        handleInvalidateRef.current();
       }
     };
     document.addEventListener("visibilitychange", handleVisibility);
@@ -1222,7 +1789,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
         const correct = new Set((question.correctAnswers || []).map(x => x.trim().toLowerCase()));
         const given = new Set((Array.isArray(a.value) ? a.value : []).map(x => x.trim().toLowerCase()));
         if (correct.size > 0 && [...correct].every(c => given.has(c)) && [...given].every(g => correct.has(g))) autoScore = question.points || 0;
-      } else if (question.type === "short_answer") {
+      } else if (question.type === "short_answer" || question.type === "math") {
         const accepted = (question.correctAnswers || []).map(x => x.toLowerCase().trim());
         if (accepted.length > 0 && accepted.includes((a.value || "").toLowerCase().trim())) autoScore = question.points || 0;
       }
@@ -1246,7 +1813,8 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
 
   if (finished && result) {
     const hasEssay = test.questions.some(q => q.type === "essay");
-    const allAutoGraded = !hasEssay;
+    const hasMathNoKey = test.questions.some(q => q.type === "math" && (!q.correctAnswers || q.correctAnswers.length === 0 || !q.correctAnswers[0]));
+    const allAutoGraded = !hasEssay && !hasMathNoKey;
 
     return (
       <div style={{ ...S.testWrap, justifyContent: "flex-start", paddingTop: "2rem", paddingBottom: "4rem" }}>
@@ -1276,7 +1844,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
                   {result.totalScore} / {result.totalPoints} pts auto-graded
                 </p>
                 <div style={{ marginTop: "0.75rem", background: "#fff3cd", color: "#856404", borderRadius: "8px", padding: "0.6rem 1rem", fontSize: "0.85rem", textAlign: "center" }}>
-                  📋 Essay questions will be graded by your teacher. Your final score may change.
+                  📋 {hasEssay && hasMathNoKey ? "Essay and unkeyed math questions" : hasEssay ? "Essay questions" : "Some math questions"} will be graded by your teacher. Your final score may change.
                 </div>
               </>
             )}
@@ -1309,10 +1877,10 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
               </div>
               <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.15rem" }}>Incorrect</div>
             </div>
-            {hasEssay && (
+            {(hasEssay || hasMathNoKey) && (
               <div>
                 <div style={{ fontSize: "1.4rem", fontFamily: "'DM Serif Display',serif" }}>
-                  {result.graded.filter((_, i) => test.questions[i].type === "essay").length}
+                  {result.graded.filter((_, i) => test.questions[i].type === "essay" || (test.questions[i].type === "math" && (!test.questions[i].correctAnswers?.length || !test.questions[i].correctAnswers[0]))).length}
                 </div>
                 <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.15rem" }}>Pending</div>
               </div>
@@ -1330,10 +1898,11 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
           {test.questions.map((q, i) => {
             const ans = result.graded[i];
             const isEssay = q.type === "essay";
+            const isMath = q.type === "math";
             const hasCorrect = q.correctAnswers?.length > 0;
             const isCorrect = !isEssay && hasCorrect && ans.autoScore === q.points;
-            const isWrong = !isEssay && hasCorrect && ans.autoScore < q.points;
-            const isPending = isEssay;
+            const isPending = isEssay || (isMath && !hasCorrect);
+            const isWrong = !isPending && hasCorrect && ans.autoScore < q.points;
 
             const borderColor = isPending ? "#b8860b" : isCorrect ? "#2d6a4f" : isWrong ? "#c84b31" : "var(--border)";
 
@@ -1350,7 +1919,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
                   <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
                     <span style={{ ...S.badge, background: "var(--cream)", color: "var(--muted)" }}>Q{i + 1}</span>
                     <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>
-                      {q.type === "multiple_choice" ? "Multiple Choice" : q.type === "multiple_select" ? "Multiple Select" : q.type === "true_false" ? "True / False" : q.type === "short_answer" ? "Short Answer" : "Essay"}
+                      {q.type === "multiple_choice" ? "Multiple Choice" : q.type === "multiple_select" ? "Multiple Select" : q.type === "true_false" ? "True / False" : q.type === "short_answer" ? "Short Answer" : q.type === "math" ? "Math Question" : "Essay"}
                     </span>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
@@ -1426,17 +1995,17 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
                     </div>
                   )}
 
-                  {(q.type === "short_answer" || q.type === "essay") && (
-                    <div style={{ background: !hasCorrect ? "var(--cream)" : isWrong ? "#fde8e4" : isPending ? "#fffbeb" : isCorrect ? "#edf7f1" : "var(--cream)", border: `1.5px solid ${!hasCorrect ? "var(--border)" : borderColor}`, borderRadius: "8px", padding: "0.75rem 1rem", fontSize: "0.9rem", color: "var(--ink)", lineHeight: 1.6 }}>
+                  {(q.type === "short_answer" || q.type === "essay" || q.type === "math") && (
+                    <div style={{ background: !hasCorrect ? "var(--cream)" : isWrong ? "#fde8e4" : isPending ? "#fffbeb" : isCorrect ? "#edf7f1" : "var(--cream)", border: `1.5px solid ${!hasCorrect ? "var(--border)" : borderColor}`, borderRadius: "8px", padding: "0.75rem 1rem", fontSize: "0.9rem", color: "var(--ink)", lineHeight: 1.6, fontFamily: q.type === "math" ? "monospace" : "inherit" }}>
                       {ans.value || <em style={{ color: "var(--muted)" }}>No answer provided</em>}
                     </div>
                   )}
 
-                  {/* Show correct answer for short_answer if wrong */}
-                  {q.type === "short_answer" && isWrong && hasCorrect && (
+                  {/* Show correct answer for short_answer or math if wrong */}
+                  {(q.type === "short_answer" || q.type === "math") && isWrong && hasCorrect && (
                     <div style={{ marginTop: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
                       <span style={{ fontSize: "0.8rem", color: "var(--accent2)", fontWeight: 600 }}>✓ Accepted:</span>
-                      <span style={{ fontSize: "0.85rem", color: "var(--accent2)" }}>{q.correctAnswers.join(", ")}</span>
+                      <span style={{ fontSize: "0.85rem", color: "var(--accent2)", fontFamily: q.type === "math" ? "monospace" : "inherit" }}>{q.correctAnswers.join(", ")}</span>
                     </div>
                   )}
                 </div>
@@ -1468,7 +2037,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
   }).length;
 
   return (
-    <div style={S.testWrap}>
+    <div style={{ ...S.testWrap, paddingBottom: showCalculator ? "420px" : "2rem" }}>
       {/* Confirmation Modal */}
       {showConfirm && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
@@ -1525,10 +2094,16 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
         </div>
 
         <p style={{ fontSize: "0.75rem", color: "var(--muted)", marginBottom: "0.5rem" }}>
-          {q.type === "multiple_choice" ? "Select one" : q.type === "multiple_select" ? "Select all that apply" : q.type === "true_false" ? "True or False" : q.type === "short_answer" ? "Short answer" : "Essay"}
+          {q.type === "multiple_choice" ? "Select one" : q.type === "multiple_select" ? "Select all that apply" : q.type === "true_false" ? "True or False" : q.type === "short_answer" ? "Short answer" : q.type === "math" ? "Math question" : "Essay"}
           {" · "}{q.points} pt{q.points !== 1 ? "s" : ""}
+          {calculatorAllowed && !showCalculator && (
+            <button onClick={() => setShowCalculator(true)} style={{ marginLeft: "0.75rem", background: "#e8f4fd", border: "none", borderRadius: "6px", padding: "0.1rem 0.5rem", color: "#1a6fa8", cursor: "pointer", fontSize: "0.75rem", fontWeight: 600 }}>🧮 Calculator</button>
+          )}
+          {calculatorAllowed && showCalculator && (
+            <button onClick={() => setShowCalculator(false)} style={{ marginLeft: "0.75rem", background: "#d4edda", border: "none", borderRadius: "6px", padding: "0.1rem 0.5rem", color: "#2d6a4f", cursor: "pointer", fontSize: "0.75rem", fontWeight: 600 }}>🧮 Hide Calc</button>
+          )}
         </p>
-        <p style={S.questionText}>{q.text}</p>
+        {q.type !== "math" && <p style={S.questionText}>{q.text}</p>}
 
         {/* Answer input by type */}
         {["multiple_choice", "true_false"].includes(q.type) && (
@@ -1560,6 +2135,14 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
         {q.type === "essay" && (
           <textarea style={{ ...S.textarea, minHeight: "140px" }} value={ans.value || ""} onChange={e => setAnswer(e.target.value)} placeholder="Write your answer here..." />
         )}
+        {q.type === "math" && (
+          <div>
+            <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: "0.5rem", fontFamily: "monospace" }}>
+              {q.text && <span style={{ background: "#f0f7ff", padding: "0.3rem 0.6rem", borderRadius: "6px", display: "inline-block", marginBottom: "0.5rem", color: "#1a3a5c", fontSize: "1rem", wordBreak: "break-all" }}>{q.text}</span>}
+            </p>
+            <input style={{ ...S.input, fontFamily: "monospace", fontSize: "1.1rem" }} value={ans.value || ""} onChange={e => setAnswer(e.target.value)} placeholder="Enter your answer..." />
+          </div>
+        )}
 
         <div style={S.navRow}>
           <button onClick={() => setCurrentQ(q => q - 1)} disabled={currentQ === 0}
@@ -1573,6 +2156,9 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
           )}
         </div>
       </div>
+      {showCalculator && calculatorAllowed && (
+        <ScientificCalculator onClose={() => setShowCalculator(false)} />
+      )}
     </div>
   );
 }
@@ -1938,6 +2524,203 @@ function FlashcardStudy({ deck, email, onDone }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// FORGOT PASSWORD
+// ═══════════════════════════════════════════════════════════════════════════════
+function ForgotPassword({ onBack }) {
+  const [email, setEmail] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const [sent, setSent] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!email.trim()) { setErr("Please enter your email address."); return; }
+    if (!/\S+@\S+\.\S+/.test(email)) { setErr("Please enter a valid email address."); return; }
+    setLoading(true); setErr("");
+    try {
+      await apiFetch('/auth/forgot-password', { method: 'POST', body: { email: email.trim().toLowerCase() } });
+      setSent(true);
+    } catch (e) {
+      // Always show success to avoid email enumeration — but surface real server errors
+      if (e.message && e.message !== 'Request failed') {
+        setErr(e.message);
+      } else {
+        setSent(true); // Don't reveal if account exists
+      }
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div style={S.authWrap}>
+      <div style={S.authBox}>
+        <button onClick={onBack} style={{ ...S.btn, ...S.btnGhost, fontSize: "0.8rem", marginBottom: "1.5rem" }}>← Back to Login</button>
+        <div style={{ fontSize: "2.5rem", marginBottom: "0.75rem" }}>🔑</div>
+        <h2 style={S.authTitle}>Forgot Password</h2>
+
+        {sent ? (
+          <>
+            <div style={{ ...S.success, marginBottom: "1.5rem" }}>
+              ✅ If an account with that email exists, a password reset link has been sent. Check your inbox (and spam folder).
+            </div>
+            <p style={{ color: "var(--muted)", fontSize: "0.9rem", marginBottom: "1.5rem", lineHeight: 1.6 }}>
+              The link will expire in <strong>1 hour</strong>. If you don't receive an email within a few minutes, double-check the address you used to register.
+            </p>
+            <button onClick={onBack} style={{ ...S.btn, ...S.btnPrimary, width: "100%" }}>Return to Login</button>
+          </>
+        ) : (
+          <>
+            <p style={S.authSub}>Enter your account email and we'll send you a reset link.</p>
+            {err && <div style={S.error}>{err}</div>}
+            <div style={S.fieldGroup}>
+              <label style={S.label}>Email Address</label>
+              <input
+                style={S.input}
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && handleSubmit()}
+                placeholder="teacher@school.edu"
+                autoFocus
+              />
+            </div>
+            <button onClick={handleSubmit} disabled={loading} style={{ ...S.btn, ...S.btnPrimary, width: "100%" }}>
+              {loading ? "Sending..." : "Send Reset Link"}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RESET PASSWORD
+// ═══════════════════════════════════════════════════════════════════════════════
+function ResetPassword({ token, onDone, onBack }) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const [done, setDone] = useState(false);
+  const [showPw, setShowPw] = useState(false);
+
+  // No token means this page was reached without a valid reset link
+  if (!token) {
+    return (
+      <div style={S.authWrap}>
+        <div style={S.authBox}>
+          <div style={{ fontSize: "2.5rem", marginBottom: "0.75rem" }}>⚠️</div>
+          <h2 style={S.authTitle}>Invalid Reset Link</h2>
+          <p style={{ color: "var(--muted)", fontSize: "0.9rem", marginBottom: "1.5rem", lineHeight: 1.6 }}>
+            This password reset link is missing or invalid. Please request a new one from the login page.
+          </p>
+          <button onClick={onBack} style={{ ...S.btn, ...S.btnPrimary, width: "100%" }}>← Back to Login</button>
+        </div>
+      </div>
+    );
+  }
+  const [showPw, setShowPw] = useState(false);
+
+  const handleReset = async () => {
+    if (!password.trim()) { setErr("Please enter a new password."); return; }
+    if (password.length < 8) { setErr("Password must be at least 8 characters."); return; }
+    if (password !== confirm) { setErr("Passwords do not match."); return; }
+    setLoading(true); setErr("");
+    try {
+      await apiFetch('/auth/reset-password', { method: 'POST', body: { token, password } });
+      setDone(true);
+    } catch (e) {
+      setErr(e.message || "Reset failed. The link may have expired. Please request a new one.");
+    } finally { setLoading(false); }
+  };
+
+  // Password strength indicator
+  const strength = (() => {
+    if (!password) return null;
+    let score = 0;
+    if (password.length >= 8) score++;
+    if (password.length >= 12) score++;
+    if (/[A-Z]/.test(password)) score++;
+    if (/[0-9]/.test(password)) score++;
+    if (/[^A-Za-z0-9]/.test(password)) score++;
+    if (score <= 1) return { label: "Weak", color: "#c84b31", width: "25%" };
+    if (score <= 2) return { label: "Fair", color: "#e87b1e", width: "50%" };
+    if (score <= 3) return { label: "Good", color: "#b8860b", width: "75%" };
+    return { label: "Strong", color: "#2d6a4f", width: "100%" };
+  })();
+
+  return (
+    <div style={S.authWrap}>
+      <div style={S.authBox}>
+        {!done && (
+          <button onClick={onBack} style={{ ...S.btn, ...S.btnGhost, fontSize: "0.8rem", marginBottom: "1.5rem" }}>← Back to Login</button>
+        )}
+        <div style={{ fontSize: "2.5rem", marginBottom: "0.75rem" }}>{done ? "🎉" : "🔒"}</div>
+        <h2 style={S.authTitle}>{done ? "Password Reset!" : "Set New Password"}</h2>
+
+        {done ? (
+          <>
+            <p style={{ color: "var(--muted)", fontSize: "0.95rem", marginBottom: "1.5rem", lineHeight: 1.6 }}>
+              Your password has been updated successfully. You can now sign in with your new password.
+            </p>
+            <button onClick={onDone} style={{ ...S.btn, ...S.btnPrimary, width: "100%" }}>Sign In Now</button>
+          </>
+        ) : (
+          <>
+            <p style={S.authSub}>Choose a strong new password for your account.</p>
+            {err && <div style={S.error}>{err}</div>}
+            <div style={S.fieldGroup}>
+              <label style={S.label}>New Password</label>
+              <div style={{ position: "relative" }}>
+                <input
+                  style={{ ...S.input, paddingRight: "3rem" }}
+                  type={showPw ? "text" : "password"}
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  placeholder="Min. 8 characters"
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPw(s => !s)}
+                  style={{ position: "absolute", right: "0.75rem", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: "1rem", color: "var(--muted)" }}
+                >
+                  {showPw ? "🙈" : "👁"}
+                </button>
+              </div>
+              {strength && (
+                <div style={{ marginTop: "0.5rem" }}>
+                  <div style={{ height: "4px", background: "var(--border)", borderRadius: "2px", overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: strength.width, background: strength.color, borderRadius: "2px", transition: "width 0.3s, background 0.3s" }} />
+                  </div>
+                  <div style={{ fontSize: "0.75rem", color: strength.color, marginTop: "0.25rem", fontWeight: 600 }}>{strength.label}</div>
+                </div>
+              )}
+            </div>
+            <div style={S.fieldGroup}>
+              <label style={S.label}>Confirm New Password</label>
+              <input
+                style={{ ...S.input, borderColor: confirm && password !== confirm ? "var(--danger)" : undefined }}
+                type={showPw ? "text" : "password"}
+                value={confirm}
+                onChange={e => setConfirm(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && handleReset()}
+                placeholder="Re-enter new password"
+              />
+              {confirm && password !== confirm && (
+                <div style={{ fontSize: "0.78rem", color: "var(--danger)", marginTop: "0.25rem" }}>Passwords do not match</div>
+              )}
+            </div>
+            <button onClick={handleReset} disabled={loading} style={{ ...S.btn, ...S.btnPrimary, width: "100%", opacity: loading ? 0.7 : 1 }}>
+              {loading ? "Resetting..." : "Reset Password"}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // INVALIDATED SCREEN
 // ═══════════════════════════════════════════════════════════════════════════════
 function InvalidatedScreen({ onHome }) {
@@ -1975,9 +2758,21 @@ function App() {
   const [teacher, setTeacher] = useState(null);
   const [studentSession, setStudentSession] = useState(null);
   const [flashcardSession, setFlashcardSession] = useState(null);
+  const [resetToken, setResetToken] = useState(null);
 
-  // Auto-restore session from stored token
+  // Auto-restore session from stored token, and check for password reset token in URL
   useEffect(() => {
+    // Check for reset token in URL query params
+    const params = new URLSearchParams(window.location.search);
+    const rt = params.get("reset_token");
+    if (rt) {
+      setResetToken(rt);
+      setScreenState("reset-password");
+      // Clean the token from the URL so it isn't bookmarked or shared
+      window.history.replaceState({}, "", window.location.pathname);
+      return;
+    }
+
     const token = localStorage.getItem('qt_token');
     if (token) {
       apiFetch('/auth/me').then(data => {
@@ -2004,11 +2799,23 @@ function App() {
           onLogin={(t) => { setTeacher(t); setScreen("teacher-dash"); }}
           onBack={() => setScreen("landing")}
           onRegister={() => setScreen("teacher-register")}
+          onForgotPassword={() => setScreen("forgot-password")}
         />
       )}
       {screen === "teacher-register" && (
         <TeacherRegister
           onLogin={(t) => { setTeacher(t); setScreen("teacher-dash"); }}
+          onBack={() => setScreen("teacher-login")}
+          onForgotPassword={() => setScreen("forgot-password")}
+        />
+      )}
+      {screen === "forgot-password" && (
+        <ForgotPassword onBack={() => setScreen("teacher-login")} />
+      )}
+      {screen === "reset-password" && (
+        <ResetPassword
+          token={resetToken}
+          onDone={() => setScreen("teacher-login")}
           onBack={() => setScreen("teacher-login")}
         />
       )}
