@@ -683,7 +683,7 @@ function TestBuilder({ test, onSave, onCancel }) {
       title: title.trim(),
       description: description.trim(),
       inApp,
-      questions,
+      questions: questions.map(({ id, ...rest }) => rest),
       code: test?.code || generateCode(),
       status: test?.status || "draft",
       createdAt: test?.createdAt || Date.now(),
@@ -1483,7 +1483,7 @@ function DeckBuilder({ deck, onSave, onCancel }) {
     for (let i = 0; i < cards.length; i++) {
       if (!cards[i].front.trim() || !cards[i].back.trim()) { setErr("Card " + (i+1) + " needs both a front and back."); return; }
     }
-    const deckData = { title: title.trim(), description: description.trim(), cards, code: deck?.code || generateCode(), status: deck?.status || "inactive", createdAt: deck?.createdAt || Date.now(), updatedAt: Date.now() };
+    const deckData = { title: title.trim(), description: description.trim(), cards: cards.map(({ id, ...rest }) => rest), code: deck?.code || generateCode(), status: deck?.status || "inactive", createdAt: deck?.createdAt || Date.now(), updatedAt: Date.now() };
     if (deck?.id) deckData.id = deck.id;
     onSave(deckData);
   };
