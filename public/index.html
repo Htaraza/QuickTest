@@ -468,11 +468,26 @@ function StudentLogin({ onEnter, onBack }) {
 // TEACHER DASHBOARD
 // ═══════════════════════════════════════════════════════════════════════════════
 function TeacherDashboard({ teacher, onLogout }) {
-  const [view, setView] = useState("tests");
+  const [view, setViewState] = useState("tests");
   const [tests, setTests] = useState([]);
   const [decks, setDecks] = useState([]);
   const [editingTest, setEditingTest] = useState(null);
   const [editingDeck, setEditingDeck] = useState(null);
+
+  const setView = (newView) => {
+    window.history.pushState({ screen: "teacher-dash", view: newView }, "", "");
+    setViewState(newView);
+  };
+
+  useEffect(() => {
+    const handlePop = (e) => {
+      if (e.state?.screen === "teacher-dash" && e.state?.view) {
+        setViewState(e.state.view);
+      }
+    };
+    window.addEventListener("popstate", handlePop);
+    return () => window.removeEventListener("popstate", handlePop);
+  }, []);
   const [selectedTestId, setSelectedTestId] = useState(null);
   const [msg, setMsg] = useState("");
 
@@ -567,9 +582,9 @@ function TeacherDashboard({ teacher, onLogout }) {
 // ─── TEST LIST ────────────────────────────────────────────────────────────────
 function TestList({ tests, onEdit, onDelete, onGrades, onSave, flash, onNew }) {
   const toggleStatus = async (test) => {
-    const newStatus = test.status === "active" ? "closed" : test.status === "draft" ? "active" : "draft";
+    const newStatus = test.status === "active" ? "closed" : "active";
     await onSave({ ...test, status: newStatus }, true);
-    flash(`Test ${newStatus === "active" ? "activated" : newStatus === "closed" ? "closed" : "set to draft"}`);
+    flash(`Test ${newStatus === "active" ? "activated" : "closed"}`);
   };
 
   const regenerateCode = async (test) => {
