@@ -23,11 +23,7 @@ async function uniqueCode() {
 async function buildTest(testRow) {
   if (!testRow) return null;
   const { data: questions } = await supabase
-    .from('questions')
-    .select('*')
-    .eq('test_id', testRow.id)
-    .order('sort_order');
-
+    .from('questions').select('*').eq('test_id', testRow.id).order('sort_order');
   return {
     id: testRow.id,
     teacherId: testRow.teacher_id,
@@ -39,7 +35,7 @@ async function buildTest(testRow) {
     createdAt: new Date(testRow.created_at).getTime(),
     updatedAt: new Date(testRow.updated_at).getTime(),
     questions: (questions || []).map(q => ({
-      id: uuidv4(),
+      id: q.id,
       type: q.type,
       text: q.text,
       points: q.points,
@@ -49,7 +45,6 @@ async function buildTest(testRow) {
   };
 }
 
-// GET /api/tests
 router.get('/', authMiddleware, async (req, res) => {
   const { data: rows, error } = await supabase
     .from('tests').select('*').eq('teacher_id', req.teacher.id).order('created_at', { ascending: false });
@@ -58,7 +53,6 @@ router.get('/', authMiddleware, async (req, res) => {
   res.json({ tests });
 });
 
-// GET /api/tests/:id
 router.get('/:id', authMiddleware, async (req, res) => {
   const { data: row } = await supabase.from('tests').select('*')
     .eq('id', req.params.id).eq('teacher_id', req.teacher.id).maybeSingle();
@@ -66,7 +60,6 @@ router.get('/:id', authMiddleware, async (req, res) => {
   res.json({ test: await buildTest(row) });
 });
 
-// POST /api/tests
 router.post('/', authMiddleware, async (req, res) => {
   try {
     const { title, description = '', inApp = true, questions = [], status = 'draft' } = req.body;
@@ -81,9 +74,14 @@ router.post('/', authMiddleware, async (req, res) => {
     if (questions.length > 0) {
       const { error: qErr } = await supabase.from('questions').insert(
         questions.map((q, i) => ({
-          id: uuidv4(), test_id: test.id, sort_order: i,
-          type: q.type, text: q.text, points: q.points || 1,
-          options: q.options || [], correct_answers: q.correctAnswers || []
+          id: uuidv4(),
+          test_id: test.id,
+          sort_order: i,
+          type: q.type,
+          text: q.text,
+          points: q.points || 1,
+          options: q.options || [],
+          correct_answers: q.correctAnswers || []
         }))
       );
       if (qErr) throw qErr;
@@ -96,7 +94,6 @@ router.post('/', authMiddleware, async (req, res) => {
   }
 });
 
-// PUT /api/tests/:id
 router.put('/:id', authMiddleware, async (req, res) => {
   try {
     const { data: existing } = await supabase.from('tests').select('*')
@@ -105,7 +102,6 @@ router.put('/:id', authMiddleware, async (req, res) => {
 
     const { title, description, inApp, questions, status, code } = req.body;
 
-    // Check code uniqueness if changing
     if (code && code !== existing.code) {
       const { data: taken } = await supabase.from('tests').select('id').eq('code', code).neq('id', existing.id).maybeSingle();
       if (taken) return res.status(409).json({ error: 'Code already in use' });
@@ -127,9 +123,14 @@ router.put('/:id', authMiddleware, async (req, res) => {
       if (questions.length > 0) {
         const { error: qErr } = await supabase.from('questions').insert(
           questions.map((q, i) => ({
-            id: q.id || uuidv4(), test_id: existing.id, sort_order: i,
-            type: q.type, text: q.text, points: q.points || 1,
-            options: q.options || [], correct_answers: q.correctAnswers || []
+            id: uuidv4(),
+            test_id: existing.id,
+            sort_order: i,
+            type: q.type,
+            text: q.text,
+            points: q.points || 1,
+            options: q.options || [],
+            correct_answers: q.correctAnswers || []
           }))
         );
         if (qErr) throw qErr;
@@ -144,7 +145,6 @@ router.put('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// DELETE /api/tests/:id
 router.delete('/:id', authMiddleware, async (req, res) => {
   const { data: row } = await supabase.from('tests').select('id')
     .eq('id', req.params.id).eq('teacher_id', req.teacher.id).maybeSingle();
@@ -153,14 +153,12 @@ router.delete('/:id', authMiddleware, async (req, res) => {
   res.json({ success: true });
 });
 
-// GET /api/tests/by-code/:code — student access (no auth)
 router.get('/by-code/:code', async (req, res) => {
   const { data: row } = await supabase.from('tests').select('*')
     .eq('code', req.params.code.toUpperCase()).eq('status', 'active').maybeSingle();
   if (!row) return res.status(404).json({ error: 'Invalid or inactive test code' });
 
   const test = await buildTest(row);
-  // Strip correct answers for student
   res.json({
     test: {
       ...test,
