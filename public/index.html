@@ -32,7 +32,7 @@
   <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <script>
-    const { useState, useEffect, useCallback, useRef, useMemo, memo } = React;
+    const { useState, useEffect, useCallback, useRef, memo } = React;
     window.QT_API_BASE = window.location.origin + '/api';
   </script>
   <script type="text/babel" data-presets="react">
@@ -549,7 +549,7 @@ function TeacherDashboard({ teacher, onLogout }) {
         {msg && <div style={{ ...S.success, position: "fixed", top: "1rem", right: "1rem", zIndex: 999 }}>{msg}</div>}
         {view === "tests" && <TestList tests={tests} onEdit={t => { setEditingTest(t); setView("edit"); }} onDelete={deleteTest} onGrades={t => { setSelectedTestId(t.id); setView("grades"); }} onSave={saveTest} flash={flash} onNew={() => setView("create")} />}
         {(view === "create" || view === "edit") && <TestBuilder test={editingTest} onSave={async (t) => { await saveTest(t); flash("Test saved!"); }} onCancel={() => setView("tests")} />}
-        {view === "grades" && <GradesView testId={selectedTestId} tests={tests} onBack={() => setView("tests")} onSave={saveTest} flash={flash} />}
+        {view === "grades" && <GradesView testId={selectedTestId} tests={tests} onBack={() => setView("tests")} flash={flash} />}
         {view === "decks" && <DeckList decks={decks} onEdit={d => { setEditingDeck(d); setView("edit-deck"); }} onDelete={deleteDeck} onSave={saveDeck} flash={flash} onNew={() => { setEditingDeck(null); setView("create-deck"); }} />}
         {(view === "create-deck" || view === "edit-deck") && <DeckBuilder deck={editingDeck} onSave={async (d) => { await saveDeck(d); flash("Deck saved!"); }} onCancel={() => setView("decks")} />}
       </div>
@@ -626,6 +626,38 @@ function TestBuilder({ test, onSave, onCancel }) {
   const [showPaste, setShowPaste] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [pasteErr, setPasteErr] = useState("");
+  const [showImport, setShowImport] = useState(false);
+  const [importTests, setImportTests] = useState([]);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importSelected, setImportSelected] = useState(null);
+  const [importChecked, setImportChecked] = useState(new Set());
+
+  const loadImportTests = async () => {
+    setImportLoading(true);
+    try {
+      const data = await apiFetch('/tests');
+      setImportTests((data.tests || []).filter(t => t.id !== test?.id));
+    } catch (e) {}
+    setImportLoading(false);
+  };
+
+  const openImport = () => {
+    setShowImport(p => !p);
+    setImportSelected(null);
+    setImportChecked(new Set());
+    if (!showImport) loadImportTests();
+  };
+
+  const importSelectedQuestions = () => {
+    if (!importSelected) return;
+    const srcTest = importTests.find(t => t.id === importSelected);
+    if (!srcTest) return;
+    const toAdd = srcTest.questions.filter((_, i) => importChecked.has(i));
+    setQuestions(prev => [...prev, ...toAdd]);
+    setShowImport(false);
+    setImportSelected(null);
+    setImportChecked(new Set());
+  };
 
   const parsePastedQuestions = () => {
     setPasteErr("");
@@ -771,10 +803,76 @@ function TestBuilder({ test, onSave, onCancel }) {
       <div style={{ ...S.card, background: "var(--cream)", border: "2px dashed var(--border)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
           <p style={{ fontWeight: 600 }}>Add Question</p>
-          <button onClick={() => setShowPaste(p => !p)} style={{ ...S.btn, background: "#e8f4fd", color: "#1a6fa8", border: "none", fontSize: "0.8rem", padding: "0.35rem 0.8rem", borderRadius: "8px" }}>
-            📋 Paste from Word / Web
-          </button>
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <button onClick={openImport} style={{ ...S.btn, background: "#f0e8fd", color: "#6b21a8", border: "none", fontSize: "0.8rem", padding: "0.35rem 0.8rem", borderRadius: "8px" }}>
+              📥 Import from Test
+            </button>
+            <button onClick={() => setShowPaste(p => !p)} style={{ ...S.btn, background: "#e8f4fd", color: "#1a6fa8", border: "none", fontSize: "0.8rem", padding: "0.35rem 0.8rem", borderRadius: "8px" }}>
+              📋 Paste from Word / Web
+            </button>
+          </div>
         </div>
+
+        {showImport && (
+          <div style={{ marginBottom: "1rem", padding: "1rem", background: "var(--white)", borderRadius: "10px", border: "1.5px solid var(--border)" }}>
+            <p style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.75rem" }}>Import questions from another test</p>
+            {importLoading && <p style={{ color: "var(--muted)", fontSize: "0.85rem" }}>Loading tests...</p>}
+            {!importLoading && importTests.length === 0 && <p style={{ color: "var(--muted)", fontSize: "0.85rem" }}>No other tests found.</p>}
+            {!importLoading && importTests.length > 0 && (
+              <>
+                <div style={{ marginBottom: "0.75rem" }}>
+                  <label style={S.label}>Select a test to import from</label>
+                  <select
+                    style={S.select}
+                    value={importSelected || ""}
+                    onChange={e => { setImportSelected(e.target.value); setImportChecked(new Set()); }}
+                  >
+                    <option value="">— Choose a test —</option>
+                    {importTests.map(t => (
+                      <option key={t.id} value={t.id}>{t.title} ({t.questions?.length || 0} questions)</option>
+                    ))}
+                  </select>
+                </div>
+                {importSelected && (() => {
+                  const srcTest = importTests.find(t => t.id === importSelected);
+                  return srcTest ? (
+                    <div>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+                        <label style={S.label}>Pick questions to import</label>
+                        <button onClick={() => setImportChecked(importChecked.size === srcTest.questions.length ? new Set() : new Set(srcTest.questions.map((_, i) => i)))}
+                          style={{ background: "none", border: "none", fontSize: "0.8rem", color: "var(--accent2)", cursor: "pointer", fontWeight: 600 }}>
+                          {importChecked.size === srcTest.questions.length ? "Deselect all" : "Select all"}
+                        </button>
+                      </div>
+                      <div style={{ maxHeight: "220px", overflowY: "auto", border: "1px solid var(--border)", borderRadius: "8px" }}>
+                        {srcTest.questions.map((q, i) => (
+                          <label key={`import-q-${i}`} style={{ display: "flex", alignItems: "flex-start", gap: "0.6rem", padding: "0.6rem 0.75rem", borderBottom: i < srcTest.questions.length - 1 ? "1px solid var(--border)" : "none", cursor: "pointer", background: importChecked.has(i) ? "#f0e8fd" : "transparent" }}>
+                            <input type="checkbox" checked={importChecked.has(i)} onChange={() => {
+                              const next = new Set(importChecked);
+                              next.has(i) ? next.delete(i) : next.add(i);
+                              setImportChecked(next);
+                            }} style={{ marginTop: "2px", flexShrink: 0 }} />
+                            <span style={{ fontSize: "0.85rem" }}>
+                              <span style={{ ...S.badge, background: "var(--cream)", color: "var(--muted)", marginRight: "0.4rem", fontSize: "0.7rem" }}>{q.type.replace("_", " ")}</span>
+                              {q.text}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}>
+                        <button onClick={importSelectedQuestions} disabled={importChecked.size === 0}
+                          style={{ ...S.btn, ...S.btnPrimary, fontSize: "0.85rem", opacity: importChecked.size === 0 ? 0.5 : 1 }}>
+                          Import {importChecked.size > 0 ? `${importChecked.size} ` : ""}Question{importChecked.size !== 1 ? "s" : ""}
+                        </button>
+                        <button onClick={() => setShowImport(false)} style={{ ...S.btn, ...S.btnGhost, fontSize: "0.85rem" }}>Cancel</button>
+                      </div>
+                    </div>
+                  ) : null;
+                })()}
+              </>
+            )}
+          </div>
+        )}
         {showPaste && (
           <div style={{ marginBottom: "1rem", padding: "1rem", background: "var(--white)", borderRadius: "10px", border: "1.5px solid var(--border)" }}>
             <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: "0.5rem" }}>
@@ -896,7 +994,7 @@ const QuestionEditor = memo(function QuestionEditor({ q, idx, total, onChange, o
 });
 
 // ─── GRADES VIEW ──────────────────────────────────────────────────────────────
-function GradesView({ testId, tests, onBack, onSave, flash }) {
+function GradesView({ testId, tests, onBack, flash }) {
   const [submissions, setSubmissions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [detailIndex, setDetailIndex] = useState(null);
@@ -1110,17 +1208,20 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
   const finish = async () => {
     setSubmitting(true);
     setShowConfirm(false);
-    // Grade
+    // Grade locally
     const q = test.questions;
     const graded = answers.map((a, i) => {
       const question = q[i];
       let autoScore = 0;
       if (question.type === "multiple_choice" || question.type === "true_false") {
-        if (question.correctAnswers?.length > 0 && a.value === question.correctAnswers[0]) autoScore = question.points || 0;
+        // normalize both sides: trim + lowercase to avoid whitespace/case mismatches
+        const correct = (question.correctAnswers?.[0] || "").trim().toLowerCase();
+        const given = (a.value || "").trim().toLowerCase();
+        if (correct && correct === given) autoScore = question.points || 0;
       } else if (question.type === "multiple_select") {
-        const correct = new Set(question.correctAnswers || []);
-        const given = new Set(Array.isArray(a.value) ? a.value : []);
-        if ([...correct].every(c => given.has(c)) && [...given].every(g => correct.has(g))) autoScore = question.points || 0;
+        const correct = new Set((question.correctAnswers || []).map(x => x.trim().toLowerCase()));
+        const given = new Set((Array.isArray(a.value) ? a.value : []).map(x => x.trim().toLowerCase()));
+        if (correct.size > 0 && [...correct].every(c => given.has(c)) && [...given].every(g => correct.has(g))) autoScore = question.points || 0;
       } else if (question.type === "short_answer") {
         const accepted = (question.correctAnswers || []).map(x => x.toLowerCase().trim());
         if (accepted.length > 0 && accepted.includes((a.value || "").toLowerCase().trim())) autoScore = question.points || 0;
@@ -1134,7 +1235,8 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
     const percentage = totalPoints > 0 ? Math.round((totalScore / totalPoints) * 100) : 0;
     try {
       const res = await apiFetch('/submissions', { method: 'POST', body: { testId: test.id, studentEmail: email, answers: graded } });
-      setResult({ totalScore: res.totalScore, totalPoints: res.totalPoints, percentage: res.percentage, graded: res.answers || graded });
+      // Use local graded for per-question display (correct highlighting) but server totals for score
+      setResult({ totalScore: res.totalScore ?? totalScore, totalPoints: res.totalPoints ?? totalPoints, percentage: res.percentage ?? percentage, graded });
     } catch (e) {
       setResult({ totalScore, totalPoints, percentage, graded });
     }
@@ -1197,7 +1299,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
           <div style={{ display: "flex", justifyContent: "space-around", textAlign: "center", paddingTop: "0.5rem" }}>
             <div>
               <div style={{ fontSize: "1.4rem", fontFamily: "'DM Serif Display',serif" }}>
-                {result.graded.filter((a, i) => test.questions[i].type !== "essay" && a.autoScore === test.questions[i].points && test.questions[i].points > 0).length}
+                {result.graded.filter((a, i) => test.questions[i].type !== "essay" && test.questions[i].correctAnswers?.length > 0 && a.autoScore > 0 && a.autoScore === test.questions[i].points).length}
               </div>
               <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.15rem" }}>Correct</div>
             </div>
@@ -1234,7 +1336,6 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
             const isPending = isEssay;
 
             const borderColor = isPending ? "#b8860b" : isCorrect ? "#2d6a4f" : isWrong ? "#c84b31" : "var(--border)";
-            const bgStripe = isPending ? "rgba(184,134,11,0.06)" : isCorrect ? "rgba(45,106,79,0.06)" : isWrong ? "rgba(200,75,49,0.06)" : "transparent";
 
             return (
               <div key={q.id} style={{
@@ -1277,16 +1378,22 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
                         const wasSelected = ans.value === opt;
                         const isCorrectOpt = q.correctAnswers?.includes(opt);
                         let optBg = "var(--white)", optBorder = "var(--border)", optColor = "var(--ink)";
-                        if (wasSelected && isCorrectOpt) { optBg = "#d4edda"; optBorder = "#2d6a4f"; optColor = "#2d6a4f"; }
-                        else if (wasSelected && !isCorrectOpt) { optBg = "#fde8e4"; optBorder = "#c84b31"; optColor = "#c84b31"; }
-                        else if (!wasSelected && isCorrectOpt && hasCorrect) { optBg = "#edf7f1"; optBorder = "#2d6a4f"; optColor = "#2d6a4f"; }
+                        if (!hasCorrect) {
+                          // No answer key: just highlight selected in neutral ink
+                          if (wasSelected) { optBg = "var(--cream)"; optBorder = "var(--ink)"; }
+                        } else {
+                          if (wasSelected && isCorrectOpt) { optBg = "#d4edda"; optBorder = "#2d6a4f"; optColor = "#2d6a4f"; }
+                          else if (wasSelected && !isCorrectOpt) { optBg = "#fde8e4"; optBorder = "#c84b31"; optColor = "#c84b31"; }
+                          else if (!wasSelected && isCorrectOpt) { optBg = "#edf7f1"; optBorder = "#2d6a4f"; optColor = "#2d6a4f"; }
+                        }
                         return (
                           <div key={j} style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.6rem 0.9rem", border: `1.5px solid ${optBorder}`, borderRadius: "8px", background: optBg, marginBottom: "0.4rem", color: optColor, fontSize: "0.9rem" }}>
                             <span style={{ fontWeight: 600, opacity: 0.6, minWidth: "16px" }}>{String.fromCharCode(65 + j)}.</span>
                             <span style={{ flex: 1 }}>{opt}</span>
-                            {wasSelected && isCorrectOpt && <span>✓</span>}
-                            {wasSelected && !isCorrectOpt && <span>✗</span>}
-                            {!wasSelected && isCorrectOpt && hasCorrect && <span style={{ fontSize: "0.75rem" }}>← correct</span>}
+                            {hasCorrect && wasSelected && isCorrectOpt && <span>✓</span>}
+                            {hasCorrect && wasSelected && !isCorrectOpt && <span>✗</span>}
+                            {hasCorrect && !wasSelected && isCorrectOpt && <span style={{ fontSize: "0.75rem" }}>← correct</span>}
+                            {!hasCorrect && wasSelected && <span style={{ fontSize: "0.75rem", opacity: 0.5 }}>your answer</span>}
                           </div>
                         );
                       })}
@@ -1299,16 +1406,20 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
                         const wasSelected = Array.isArray(ans.value) && ans.value.includes(opt);
                         const isCorrectOpt = q.correctAnswers?.includes(opt);
                         let optBg = "var(--white)", optBorder = "var(--border)", optColor = "var(--ink)";
-                        if (wasSelected && isCorrectOpt) { optBg = "#d4edda"; optBorder = "#2d6a4f"; optColor = "#2d6a4f"; }
-                        else if (wasSelected && !isCorrectOpt) { optBg = "#fde8e4"; optBorder = "#c84b31"; optColor = "#c84b31"; }
-                        else if (!wasSelected && isCorrectOpt && hasCorrect) { optBg = "#edf7f1"; optBorder = "#2d6a4f"; optColor = "#2d6a4f"; }
+                        if (!hasCorrect) {
+                          if (wasSelected) { optBg = "var(--cream)"; optBorder = "var(--ink)"; }
+                        } else {
+                          if (wasSelected && isCorrectOpt) { optBg = "#d4edda"; optBorder = "#2d6a4f"; optColor = "#2d6a4f"; }
+                          else if (wasSelected && !isCorrectOpt) { optBg = "#fde8e4"; optBorder = "#c84b31"; optColor = "#c84b31"; }
+                          else if (!wasSelected && isCorrectOpt) { optBg = "#edf7f1"; optBorder = "#2d6a4f"; optColor = "#2d6a4f"; }
+                        }
                         return (
                           <div key={j} style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.6rem 0.9rem", border: `1.5px solid ${optBorder}`, borderRadius: "8px", background: optBg, marginBottom: "0.4rem", color: optColor, fontSize: "0.9rem" }}>
                             <span>{wasSelected ? "☑" : "☐"}</span>
                             <span style={{ flex: 1 }}>{opt}</span>
-                            {wasSelected && isCorrectOpt && <span>✓</span>}
-                            {wasSelected && !isCorrectOpt && <span>✗</span>}
-                            {!wasSelected && isCorrectOpt && hasCorrect && <span style={{ fontSize: "0.75rem" }}>← should select</span>}
+                            {hasCorrect && wasSelected && isCorrectOpt && <span>✓</span>}
+                            {hasCorrect && wasSelected && !isCorrectOpt && <span>✗</span>}
+                            {hasCorrect && !wasSelected && isCorrectOpt && <span style={{ fontSize: "0.75rem" }}>← should select</span>}
                           </div>
                         );
                       })}
@@ -1316,7 +1427,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
                   )}
 
                   {(q.type === "short_answer" || q.type === "essay") && (
-                    <div style={{ background: isWrong ? "#fde8e4" : isPending ? "#fffbeb" : isCorrect ? "#edf7f1" : "var(--cream)", border: `1.5px solid ${borderColor}`, borderRadius: "8px", padding: "0.75rem 1rem", fontSize: "0.9rem", color: "var(--ink)", lineHeight: 1.6 }}>
+                    <div style={{ background: !hasCorrect ? "var(--cream)" : isWrong ? "#fde8e4" : isPending ? "#fffbeb" : isCorrect ? "#edf7f1" : "var(--cream)", border: `1.5px solid ${!hasCorrect ? "var(--border)" : borderColor}`, borderRadius: "8px", padding: "0.75rem 1rem", fontSize: "0.9rem", color: "var(--ink)", lineHeight: 1.6 }}>
                       {ans.value || <em style={{ color: "var(--muted)" }}>No answer provided</em>}
                     </div>
                   )}
@@ -1350,7 +1461,11 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
   const q = test.questions[currentQ];
   const ans = answers[currentQ];
   const progress = ((currentQ + 1) / test.questions.length) * 100;
-  const answeredCount = answers.filter(a => a.value !== null && a.value !== undefined && a.value !== "").length;
+  const answeredCount = answers.filter(a => {
+    if (a.value === null || a.value === undefined || a.value === "") return false;
+    if (Array.isArray(a.value)) return a.value.length > 0;
+    return true;
+  }).length;
 
   return (
     <div style={S.testWrap}>
@@ -1396,7 +1511,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
             {showDropdown && (
               <div style={{ position: "absolute", right: 0, top: "calc(100% + 4px)", background: "var(--white)", border: "1.5px solid var(--border)", borderRadius: "8px", zIndex: 100, minWidth: "160px", boxShadow: "0 8px 24px rgba(0,0,0,0.1)", maxHeight: "200px", overflowY: "auto" }}>
                 {test.questions.map((qq, i) => (
-                  <div key={i} onClick={() => { setCurrentQ(i); setShowDropdown(false); }}
+                  <div key={`goto-q-${i}`} onClick={() => { setCurrentQ(i); setShowDropdown(false); }}
                     style={{ padding: "0.6rem 1rem", cursor: "pointer", fontSize: "0.85rem", background: i === currentQ ? "var(--cream)" : "transparent", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span>Q{i + 1}</span>
                     {answers[i]?.value !== null && answers[i]?.value !== undefined && answers[i]?.value !== "" && (
@@ -1419,7 +1534,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
         {["multiple_choice", "true_false"].includes(q.type) && (
           <div>
             {(q.type === "true_false" ? ["True", "False"] : q.options).map((opt, i) => (
-              <button key={i} onClick={() => setAnswer(opt)}
+              <button key={`mc-${i}-${opt}`} onClick={() => setAnswer(opt)}
                 style={{ ...S.optionBtn, ...(ans.value === opt ? S.optionBtnSelected : {}) }}>
                 <span style={{ marginRight: "0.75rem", fontWeight: 600, opacity: 0.5 }}>{String.fromCharCode(65 + i)}.</span>{opt}
               </button>
@@ -1431,7 +1546,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
             {q.options.map((opt, i) => {
               const selected = Array.isArray(ans.value) && ans.value.includes(opt);
               return (
-                <button key={i} onClick={() => toggleMultiSelect(opt)}
+                <button key={`ms-${i}-${opt}`} onClick={() => toggleMultiSelect(opt)}
                   style={{ ...S.optionBtn, ...(selected ? S.optionBtnSelected : {}) }}>
                   <span style={{ marginRight: "0.75rem" }}>{selected ? "☑" : "☐"}</span>{opt}
                 </button>
