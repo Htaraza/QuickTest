@@ -751,7 +751,7 @@ function TeacherDashboard({ teacher, onLogout }) {
         saved = res.test || res;
         setTests(prev => [saved, ...prev]);
       }
-      if (!noNav) setView('tests');
+      if (!noNav) { await loadTests(); setView('tests'); }
     } catch (e) { flash('Error saving test: ' + e.message); }
   };
   const saveDeck = async (deck, noNav = false) => {
@@ -766,7 +766,7 @@ function TeacherDashboard({ teacher, onLogout }) {
         saved = res.deck || res;
         setDecks(prev => [saved, ...prev]);
       }
-      if (!noNav) setView('decks');
+      if (!noNav) { await loadDecks(); setView('decks'); }
     } catch (e) { flash('Error saving deck: ' + e.message); }
   };
   const deleteTest = async (id) => {
@@ -847,7 +847,7 @@ function TeacherDashboard({ teacher, onLogout }) {
       </div>
       <div style={S.main}>
         {msg && <div style={{ ...S.success, position: "fixed", top: "1rem", right: "1rem", zIndex: 999 }}>{msg}</div>}
-        {view === "tests" && <TestList tests={tests} onEdit={t => { setEditingTest(t); setView("edit"); }} onDelete={deleteTest} onGrades={t => { setSelectedTestId(t.id); setView("grades"); }} onSave={saveTest} flash={flash} onNew={() => setView("create")} />}
+        {view === "tests" && <TestList tests={tests} onEdit={t => { setEditingTest(tests.find(x => x.id === t.id) || t); setView("edit"); }} onDelete={deleteTest} onGrades={t => { setSelectedTestId(t.id); setView("grades"); }} onSave={saveTest} flash={flash} onNew={() => setView("create")} />}
         {(view === "create" || view === "edit") && <TestBuilder test={editingTest} onSave={async (t) => { flash("Test saved!"); await saveTest(t); }} onCancel={() => setView("tests")} />}
         {view === "grades" && <GradesView testId={selectedTestId} tests={tests} onBack={() => setView("tests")} flash={flash} />}
         {view === "decks" && <DeckList decks={decks} onEdit={d => { setEditingDeck(d); setView("edit-deck"); }} onDelete={deleteDeck} onSave={saveDeck} flash={flash} onNew={() => { setEditingDeck(null); setView("create-deck"); }} />}
@@ -937,8 +937,8 @@ function TestBuilder({ test, onSave, onCancel }) {
     setImportLoading(true);
     try {
       const data = await apiFetch('/tests');
-      setImportTests((data.tests || []).filter(t => t.id !== test?.id));
-    } catch (e) {}
+      setImportTests((data.tests || (Array.isArray(data) ? data : [])).filter(t => t.id !== test?.id));
+    } catch (e) { console.error('loadImportTests', e); }
     setImportLoading(false);
   };
 
@@ -1347,37 +1347,28 @@ function ScientificCalculator({ onClose }) {
   const [expr, setExpr] = useState("");
   const [justEvaluated, setJustEvaluated] = useState(false);
   const [mem, setMem] = useState(0);
-  const [deg, setDeg] = useState(true); // degrees vs radians
+  const [deg, setDeg] = useState(true);
+  const [activeTab, setActiveTab] = useState("basic");
 
   const press = (val) => {
     if (val === "C") { setDisplay("0"); setExpr(""); setJustEvaluated(false); return; }
     if (val === "⌫") {
       if (justEvaluated) { setDisplay("0"); setExpr(""); setJustEvaluated(false); return; }
       const nd = display.length > 1 ? display.slice(0, -1) : "0";
-      setDisplay(nd);
-      setExpr(prev => prev.slice(0, -1));
-      return;
+      setDisplay(nd); setExpr(prev => prev.slice(0, -1)); return;
     }
     if (val === "=") {
       try {
-        // Replace display symbols with JS eval-able ones
-        // Replace 'e' constant ONLY when standalone (not inside function names)
-        let evalExpr = expr
+        let ev = expr
           .replace(/×/g, "*").replace(/÷/g, "/").replace(/−/g, "-")
-          .replace(/π/g, `(${Math.PI})`)
-          .replace(/\be\b/g, `(${Math.E})`)
+          .replace(/π/g, `(${Math.PI})`).replace(/\be\b/g, `(${Math.E})`)
           .replace(/sin\(/g, `Math.sin(toRad(`).replace(/cos\(/g, `Math.cos(toRad(`).replace(/tan\(/g, `Math.tan(toRad(`)
           .replace(/√\(/g, `Math.sqrt(`).replace(/log\(/g, `Math.log10(`).replace(/ln\(/g, `Math.log(`)
           .replace(/\^/g, "**").replace(/abs\(/g, `Math.abs(`);
-        // close extra parens from trig injection
-        const extraClose = (evalExpr.match(/toRad\(/g) || []).length;
-        evalExpr += ")".repeat(extraClose);
-        // eslint-disable-next-line no-new-func
-        const result = Function(`"use strict"; const toRad = (x) => ${deg} ? x * Math.PI / 180 : x; return (${evalExpr})`)();
+        ev += ")".repeat((ev.match(/toRad\(/g) || []).length);
+        const result = Function(`"use strict"; const toRad = (x) => ${deg} ? x * Math.PI / 180 : x; return (${ev})`)();
         const res = isFinite(result) ? (Number.isInteger(result) ? String(result) : parseFloat(result.toFixed(10)).toString()) : "Error";
-        setDisplay(res);
-        setExpr(res);
-        setJustEvaluated(true);
+        setDisplay(res); setExpr(res); setJustEvaluated(true);
       } catch { setDisplay("Error"); setExpr(""); setJustEvaluated(true); }
       return;
     }
@@ -1386,8 +1377,6 @@ function ScientificCalculator({ onClose }) {
     if (val === "MC") { setMem(0); return; }
     if (val === "±") { const n = parseFloat(display) * -1; const s = String(n); setDisplay(s); setExpr(prev => { const p = justEvaluated ? "" : prev; return p.slice(0, -display.length) + s; }); return; }
     if (val === "%") { const n = parseFloat(display) / 100; const s = String(n); setDisplay(s); setExpr(prev => justEvaluated ? s : prev.slice(0, -display.length) + s); setJustEvaluated(false); return; }
-
-    // Functions that need an opening paren
     const funcKeys = ["sin", "cos", "tan", "√", "log", "ln", "abs"];
     if (funcKeys.includes(val)) {
       const token = val + "(";
@@ -1395,92 +1384,127 @@ function ScientificCalculator({ onClose }) {
       else { setDisplay(display + token); setExpr(prev => prev + token); }
       return;
     }
-    if (val === "x²") { const token = "^2"; setDisplay(display + token); setExpr(prev => (justEvaluated ? display : prev) + "^2"); setJustEvaluated(false); return; }
-    if (val === "xʸ") { const token = "^"; setDisplay(display + "^"); setExpr(prev => (justEvaluated ? display : prev) + "^"); setJustEvaluated(false); return; }
+    if (val === "x²") { setDisplay(display + "^2"); setExpr(prev => (justEvaluated ? display : prev) + "^2"); setJustEvaluated(false); return; }
+    if (val === "xʸ") { setDisplay(display + "^"); setExpr(prev => (justEvaluated ? display : prev) + "^"); setJustEvaluated(false); return; }
     if (val === "1/x") { const n = 1 / parseFloat(display); setDisplay(String(n)); setExpr(String(n)); setJustEvaluated(true); return; }
     if (val === "DEG" || val === "RAD") { setDeg(d => !d); return; }
-
     const isOp = ["+", "−", "×", "÷", "(", ")", "."].includes(val);
-    if (justEvaluated && !isOp) {
-      setDisplay(val); setExpr(val); setJustEvaluated(false);
-    } else if (justEvaluated && isOp) {
-      setDisplay(display + val); setExpr(display + val); setJustEvaluated(false);
-    } else {
-      const newDisplay = display === "0" && !isOp ? val : display + val;
-      setDisplay(newDisplay);
-      setExpr(prev => prev + val);
-    }
+    if (justEvaluated && !isOp) { setDisplay(val); setExpr(val); setJustEvaluated(false); }
+    else if (justEvaluated && isOp) { setDisplay(display + val); setExpr(display + val); setJustEvaluated(false); }
+    else { const nd = display === "0" && !isOp ? val : display + val; setDisplay(nd); setExpr(prev => prev + val); }
   };
 
-  const btnStyle = (bg, fg = "#fff") => ({
-    padding: "0.7rem 0.3rem", borderRadius: "8px", border: "none", cursor: "pointer",
-    fontSize: "0.9rem", fontWeight: 600, background: bg, color: fg,
-    transition: "opacity 0.1s", flex: 1, minWidth: 0
-  });
+  const num = "#1e1e2e", op = "#e87b1e", fn = "#2d5a8e", util = "#3a3a4a", eq = "#2d6a4f", clr = "#c84b31";
+  const Btn = ({ l, bg, wide, title: tt }) => (
+    <button onClick={() => press(l)} title={tt || l}
+      style={{ flex: wide ? 2 : 1, padding: "0.72rem 0.2rem", borderRadius: "10px", border: "none",
+        cursor: "pointer", fontSize: "0.93rem", fontWeight: 600, background: bg, color: "#fff",
+        minWidth: 0, transition: "filter 0.1s" }}
+      onPointerDown={e => e.currentTarget.style.filter = "brightness(0.75)"}
+      onPointerUp={e => e.currentTarget.style.filter = ""}
+      onPointerLeave={e => e.currentTarget.style.filter = ""}>
+      {l}
+    </button>
+  );
 
-  const rows = [
-    [
-      { l: deg ? "DEG" : "RAD", bg: "#3a3a4a", title: "Toggle degrees/radians" },
-      { l: "sin", bg: "#2d5a8e" }, { l: "cos", bg: "#2d5a8e" }, { l: "tan", bg: "#2d5a8e" },
-      { l: "π", bg: "#2d5a8e" },
-    ],
-    [
-      { l: "MC", bg: "#3a3a4a" }, { l: "MR", bg: "#3a3a4a" }, { l: "M+", bg: "#3a3a4a" },
-      { l: "√", bg: "#2d5a8e" }, { l: "x²", bg: "#2d5a8e" },
-    ],
-    [
-      { l: "xʸ", bg: "#2d5a8e" }, { l: "log", bg: "#2d5a8e" }, { l: "ln", bg: "#2d5a8e" },
-      { l: "abs", bg: "#2d5a8e" }, { l: "1/x", bg: "#2d5a8e" },
-    ],
-    [
-      { l: "(", bg: "#3a3a4a" }, { l: ")", bg: "#3a3a4a" },
-      { l: "%", bg: "#3a3a4a" }, { l: "±", bg: "#3a3a4a" }, { l: "C", bg: "#c84b31" },
-    ],
-    [
-      { l: "7", bg: "#1e1e2e" }, { l: "8", bg: "#1e1e2e" }, { l: "9", bg: "#1e1e2e" },
-      { l: "÷", bg: "#e87b1e" }, { l: "⌫", bg: "#3a3a4a" },
-    ],
-    [
-      { l: "4", bg: "#1e1e2e" }, { l: "5", bg: "#1e1e2e" }, { l: "6", bg: "#1e1e2e" },
-      { l: "×", bg: "#e87b1e" }, { l: "(", bg: "#3a3a4a", hide: true },
-    ],
-    [
-      { l: "1", bg: "#1e1e2e" }, { l: "2", bg: "#1e1e2e" }, { l: "3", bg: "#1e1e2e" },
-      { l: "−", bg: "#e87b1e" }, { l: ")", bg: "#3a3a4a", hide: true },
-    ],
-    [
-      { l: "0", bg: "#1e1e2e" }, { l: ".", bg: "#1e1e2e" }, { l: "e", bg: "#2d5a8e" },
-      { l: "+", bg: "#e87b1e" }, { l: "=", bg: "#2d6a4f" },
-    ],
-  ];
-
-  // Simplify rows 6 and 7 - remove hidden buttons and make remaining fill space
-  const cleanRows = rows.map(row => row.filter(b => !b.hide));
+  const tabBtn = (id, label) => (
+    <button onClick={() => setActiveTab(id)} style={{
+      flex: 1, padding: "0.38rem 0.2rem", border: "none", borderRadius: "7px", cursor: "pointer",
+      fontSize: "0.78rem", fontWeight: 600,
+      background: activeTab === id ? "rgba(255,255,255,0.18)" : "transparent",
+      color: activeTab === id ? "#fff" : "rgba(255,255,255,0.45)",
+    }}>{label}</button>
+  );
 
   return (
-    <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 500, background: "#12121e", borderRadius: "20px 20px 0 0", boxShadow: "0 -8px 40px rgba(0,0,0,0.6)", paddingBottom: "env(safe-area-inset-bottom)" }}>
-      {/* Handle bar + header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.75rem 1rem 0.25rem" }}>
-        <span style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.75rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>🧮 Calculator</span>
-        <button onClick={onClose} style={{ background: "rgba(255,255,255,0.1)", border: "none", borderRadius: "20px", padding: "0.25rem 0.75rem", color: "#fff", cursor: "pointer", fontSize: "0.8rem" }}>Hide ↓</button>
+    <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 500,
+      background: "#12121e", borderRadius: "20px 20px 0 0", boxShadow: "0 -8px 40px rgba(0,0,0,0.6)",
+      paddingBottom: "env(safe-area-inset-bottom)" }}>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.55rem 1rem 0.2rem" }}>
+        <span style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.68rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>🧮 Calculator</span>
+        <button onClick={onClose} style={{ background: "rgba(255,255,255,0.1)", border: "none", borderRadius: "20px", padding: "0.18rem 0.65rem", color: "#fff", cursor: "pointer", fontSize: "0.77rem" }}>Hide ↓</button>
       </div>
-      {/* Display */}
-      <div style={{ padding: "0.25rem 1rem 0.5rem", textAlign: "right" }}>
-        <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.3)", minHeight: "1.2em", wordBreak: "break-all" }}>{expr || " "}</div>
-        <div style={{ fontSize: "2rem", color: "#fff", fontFamily: "monospace", fontWeight: 300, letterSpacing: "-0.02em", wordBreak: "break-all", lineHeight: 1.2 }}>{display}</div>
+
+      <div style={{ padding: "0 1rem 0.35rem", textAlign: "right" }}>
+        <div style={{ fontSize: "0.67rem", color: "rgba(255,255,255,0.28)", minHeight: "1em", wordBreak: "break-all" }}>{expr || " "}</div>
+        <div style={{ fontSize: "1.85rem", color: "#fff", fontFamily: "monospace", fontWeight: 300, wordBreak: "break-all", lineHeight: 1.2 }}>{display}</div>
       </div>
-      {/* Buttons */}
-      <div style={{ padding: "0 0.75rem 0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-        {cleanRows.map((row, ri) => (
-          <div key={ri} style={{ display: "flex", gap: "0.4rem" }}>
-            {row.map((btn, bi) => (
-              <button key={bi} onClick={() => press(btn.l)} title={btn.title}
-                style={btnStyle(btn.bg)}>
-                {btn.l}
-              </button>
-            ))}
+
+      <div style={{ display: "flex", gap: "0.25rem", padding: "0 0.75rem 0.35rem" }}>
+        {tabBtn("basic", "Basic")}
+        {tabBtn("functions", "Functions")}
+        {tabBtn("memory", "Memory")}
+      </div>
+
+      <div style={{ padding: "0 0.75rem 0.75rem", display: "flex", flexDirection: "column", gap: "0.38rem" }}>
+        {activeTab === "basic" && (<>
+          <div style={{ display: "flex", gap: "0.38rem" }}>
+            <Btn l="C" bg={clr} /><Btn l="±" bg={util} /><Btn l="%" bg={util} /><Btn l="⌫" bg={util} />
           </div>
-        ))}
+          <div style={{ display: "flex", gap: "0.38rem" }}>
+            <Btn l="7" bg={num} /><Btn l="8" bg={num} /><Btn l="9" bg={num} /><Btn l="÷" bg={op} />
+          </div>
+          <div style={{ display: "flex", gap: "0.38rem" }}>
+            <Btn l="4" bg={num} /><Btn l="5" bg={num} /><Btn l="6" bg={num} /><Btn l="×" bg={op} />
+          </div>
+          <div style={{ display: "flex", gap: "0.38rem" }}>
+            <Btn l="1" bg={num} /><Btn l="2" bg={num} /><Btn l="3" bg={num} /><Btn l="−" bg={op} />
+          </div>
+          <div style={{ display: "flex", gap: "0.38rem" }}>
+            <Btn l="0" bg={num} wide /><Btn l="." bg={num} /><Btn l="+" bg={op} /><Btn l="=" bg={eq} />
+          </div>
+        </>)}
+
+        {activeTab === "functions" && (<>
+          <div style={{ display: "flex", gap: "0.38rem" }}>
+            <Btn l={deg ? "DEG" : "RAD"} bg={util} title="Toggle degrees / radians" />
+            <Btn l="(" bg={util} /><Btn l=")" bg={util} /><Btn l="⌫" bg={util} />
+          </div>
+          <div style={{ display: "flex", gap: "0.38rem" }}>
+            <Btn l="sin" bg={fn} title="Sine" /><Btn l="cos" bg={fn} title="Cosine" /><Btn l="tan" bg={fn} title="Tangent" /><Btn l="π" bg={fn} title="Pi (3.14159…)" />
+          </div>
+          <div style={{ display: "flex", gap: "0.38rem" }}>
+            <Btn l="√" bg={fn} title="Square root" /><Btn l="x²" bg={fn} title="Square (x²)" /><Btn l="xʸ" bg={fn} title="Power (xʸ)" /><Btn l="1/x" bg={fn} title="Reciprocal" />
+          </div>
+          <div style={{ display: "flex", gap: "0.38rem" }}>
+            <Btn l="log" bg={fn} title="Log base 10" /><Btn l="ln" bg={fn} title="Natural log" /><Btn l="abs" bg={fn} title="Absolute value" /><Btn l="e" bg={fn} title="Euler's number (2.718…)" />
+          </div>
+          <div style={{ display: "flex", gap: "0.38rem" }}>
+            <Btn l="7" bg={num} /><Btn l="8" bg={num} /><Btn l="9" bg={num} /><Btn l="=" bg={eq} />
+          </div>
+          <div style={{ display: "flex", gap: "0.38rem" }}>
+            <Btn l="4" bg={num} /><Btn l="5" bg={num} /><Btn l="6" bg={num} /><Btn l="C" bg={clr} />
+          </div>
+          <div style={{ display: "flex", gap: "0.38rem" }}>
+            <Btn l="1" bg={num} /><Btn l="2" bg={num} /><Btn l="3" bg={num} /><Btn l="+" bg={op} />
+          </div>
+          <div style={{ display: "flex", gap: "0.38rem" }}>
+            <Btn l="0" bg={num} wide /><Btn l="." bg={num} /><Btn l="−" bg={op} />
+          </div>
+        </>)}
+
+        {activeTab === "memory" && (<>
+          <div style={{ padding: "0.45rem 0.75rem", background: "rgba(255,255,255,0.06)", borderRadius: "8px", marginBottom: "0.2rem" }}>
+            <div style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.35)", marginBottom: "0.15rem" }}>STORED VALUE</div>
+            <div style={{ fontFamily: "monospace", color: "#fff", fontSize: "1.05rem" }}>{mem || "0"}</div>
+          </div>
+          <div style={{ display: "flex", gap: "0.38rem" }}>
+            <Btn l="MC" bg={util} title="Clear memory" /><Btn l="MR" bg={util} title="Recall memory" /><Btn l="M+" bg={util} title="Add display to memory" />
+          </div>
+          <div style={{ display: "flex", gap: "0.38rem" }}>
+            <Btn l="7" bg={num} /><Btn l="8" bg={num} /><Btn l="9" bg={num} /><Btn l="÷" bg={op} />
+          </div>
+          <div style={{ display: "flex", gap: "0.38rem" }}>
+            <Btn l="4" bg={num} /><Btn l="5" bg={num} /><Btn l="6" bg={num} /><Btn l="×" bg={op} />
+          </div>
+          <div style={{ display: "flex", gap: "0.38rem" }}>
+            <Btn l="1" bg={num} /><Btn l="2" bg={num} /><Btn l="3" bg={num} /><Btn l="−" bg={op} />
+          </div>
+          <div style={{ display: "flex", gap: "0.38rem" }}>
+            <Btn l="0" bg={num} wide /><Btn l="." bg={num} /><Btn l="+" bg={op} /><Btn l="=" bg={eq} />
+          </div>
+        </>)}
       </div>
     </div>
   );
@@ -1633,7 +1657,7 @@ function GradesView({ testId, tests, onBack, flash }) {
           <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
             <span style={{ fontSize: "1.5rem", fontFamily: "'DM Serif Display',serif" }}>{detail.percentage}%</span>
             <button
-              onClick={() => setDetailIndex(i => Math.max(0, i - 1))}
+              onClick={() => setDetailIndex(n => Math.max(0, n - 1))}
               disabled={detailIndex === 0}
               style={{ ...S.btn, ...S.btnGhost, fontSize: "0.8rem", padding: "0.3rem 0.7rem", opacity: detailIndex === 0 ? 0.4 : 1 }}
             >← Prev</button>
@@ -1812,8 +1836,19 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
         const given = new Set((Array.isArray(a.value) ? a.value : []).map(x => x.trim().toLowerCase()));
         if (correct.size > 0 && [...correct].every(c => given.has(c)) && [...given].every(g => correct.has(g))) autoScore = question.points || 0;
       } else if (question.type === "short_answer" || question.type === "math") {
-        const accepted = (question.correctAnswers || []).map(x => x.toLowerCase().trim());
-        if (accepted.length > 0 && accepted.includes((a.value || "").toLowerCase().trim())) autoScore = question.points || 0;
+        const given = (a.value || "").trim();
+        const accepted = (question.correctAnswers || []).map(x => x.trim());
+        if (accepted.length > 0) {
+          // First try exact case-insensitive match
+          const exactMatch = accepted.some(x => x.toLowerCase() === given.toLowerCase());
+          // Then try numeric equivalence (e.g. "4" matches "4.0", "4.00", "4.000")
+          const givenNum = parseFloat(given);
+          const numericMatch = !isNaN(givenNum) && accepted.some(x => {
+            const xNum = parseFloat(x);
+            return !isNaN(xNum) && Math.abs(givenNum - xNum) < 0.0001;
+          });
+          if (exactMatch || numericMatch) autoScore = question.points || 0;
+        }
       }
       // essay: 0 auto score, teacher grades manually
       return { ...a, autoScore };
@@ -1827,7 +1862,10 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
       // Use local graded for per-question display (correct highlighting) but server totals for score
       setResult({ totalScore: res.totalScore ?? totalScore, totalPoints: res.totalPoints ?? totalPoints, percentage: res.percentage ?? percentage, graded });
     } catch (e) {
+      // Server save failed — still show result using local grading
       setResult({ totalScore, totalPoints, percentage, graded });
+    } finally {
+      setSubmitting(false);
     }
     finishedRef.current = true;
     setFinished(true);
@@ -2167,10 +2205,10 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
         )}
 
         <div style={S.navRow}>
-          <button onClick={() => setCurrentQ(q => q - 1)} disabled={currentQ === 0}
+          <button onClick={() => setCurrentQ(n => n - 1)} disabled={currentQ === 0}
             style={{ ...S.btn, ...S.btnGhost, opacity: currentQ === 0 ? 0.4 : 1 }}>← Previous</button>
           {currentQ < test.questions.length - 1 ? (
-            <button onClick={() => setCurrentQ(q => q + 1)} style={{ ...S.btn, ...S.btnPrimary }}>Next →</button>
+            <button onClick={() => setCurrentQ(n => n + 1)} style={{ ...S.btn, ...S.btnPrimary }}>Next →</button>
           ) : (
             <button onClick={() => setShowConfirm(true)} disabled={submitting} style={{ ...S.btn, ...S.btnSuccess }}>
               {submitting ? "Submitting..." : "✓ Finish Test"}
@@ -2233,7 +2271,7 @@ function DeckList({ decks, onEdit, onDelete, onSave, flash, onNew }) {
               <button onClick={() => toggleStatus(deck)} style={{ ...S.btn, background: deck.status === "active" ? "#fde8e4" : "#d4edda", color: deck.status === "active" ? "#c84b31" : "#2d6a4f", border: "none", fontSize: "0.8rem", padding: "0.4rem 0.8rem", borderRadius: "8px" }}>
                 {deck.status === "active" ? "Deactivate" : "Activate"}
               </button>
-              <button onClick={() => onDelete(deck.id)} style={{ background: "none", border: "none", color: "var(--danger)", fontSize: "0.8rem", padding: "0.4rem 0.8rem", borderRadius: "8px", cursor: "pointer" }}>🗑</button>
+              <button onClick={() => { if (window.confirm("Delete this deck? This cannot be undone.")) onDelete(deck.id); }} style={{ background: "none", border: "none", color: "var(--danger)", fontSize: "0.8rem", padding: "0.4rem 0.8rem", borderRadius: "8px", cursor: "pointer" }}>🗑 Delete</button>
             </div>
           </div>
         ))}
@@ -2265,7 +2303,7 @@ function DeckBuilder({ deck, onSave, onCancel }) {
     for (let i = 0; i < cards.length; i++) {
       if (!cards[i].front.trim() || !cards[i].back.trim()) { setErr("Card " + (i+1) + " needs both a front and back."); return; }
     }
-    const deckData = { title: title.trim(), description: description.trim(), cards: cards.map(({ id, ...rest }) => rest), code: deck?.code || generateCode(), status: deck?.status || "inactive", createdAt: deck?.createdAt || Date.now(), updatedAt: Date.now() };
+    const deckData = { title: title.trim(), description: description.trim(), cards: cards, code: deck?.code || generateCode(), status: deck?.status || "inactive", createdAt: deck?.createdAt || Date.now(), updatedAt: Date.now() };
     if (deck?.id) deckData.id = deck.id;
     setSaving(true);
     setErr("");
@@ -2807,8 +2845,12 @@ function App() {
       const authTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000));
       Promise.race([apiFetch('/auth/me'), authTimeout])
         .then(data => {
-          setTeacher(data.teacher);
-          setScreenState('teacher-dash');
+          if (data.teacher) {
+            setTeacher(data.teacher);
+            setScreenState('teacher-dash');
+          } else {
+            localStorage.removeItem('qt_token');
+          }
         })
         .catch(() => {
           localStorage.removeItem('qt_token');
