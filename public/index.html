@@ -259,7 +259,7 @@ async function apiFetch(path, options = {}) {
     return result;
   } catch (e) {
     // If it's a network error (no server), switch to mock mode permanently
-    if (e instanceof TypeError && e.message.includes('fetch')) {
+    if (e instanceof TypeError && (e.message.includes('fetch') || e.message.includes('timeout') || e.message.includes('abort') || e.message.includes('Failed'))) {
       _mockMode = true;
       console.info('[QuickTest] No server detected — running in demo mode with localStorage.');
       return new Promise((resolve, reject) => {
@@ -275,18 +275,28 @@ async function apiFetch(path, options = {}) {
 
 async function _realFetch(path, options = {}) {
   const token = localStorage.getItem('qt_token');
-  const res = await fetch(API_BASE + path, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: 'Bearer ' + token } : {}),
-      ...(options.headers || {})
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'Request failed');
-  return data;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3000);
+  try {
+    const res = await fetch(API_BASE + path, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: 'Bearer ' + token } : {}),
+        ...(options.headers || {})
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined
+    });
+    clearTimeout(timer);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Request failed');
+    return data;
+  } catch (e) {
+    clearTimeout(timer);
+    if (e.name === 'AbortError') throw new TypeError('fetch timeout');
+    throw e;
+  }
 }
 
 // ─── FONTS ───────────────────────────────────────────────────────────────────
@@ -2618,7 +2628,6 @@ function ResetPassword({ token, onDone, onBack }) {
       </div>
     );
   }
-  const [showPw, setShowPw] = useState(false);
 
   const handleReset = async () => {
     if (!password.trim()) { setErr("Please enter a new password."); return; }
@@ -2775,12 +2784,15 @@ function App() {
 
     const token = localStorage.getItem('qt_token');
     if (token) {
-      apiFetch('/auth/me').then(data => {
-        setTeacher(data.teacher);
-        setScreenState('teacher-dash');
-      }).catch(() => {
-        localStorage.removeItem('qt_token');
-      });
+      const authTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000));
+      Promise.race([apiFetch('/auth/me'), authTimeout])
+        .then(data => {
+          setTeacher(data.teacher);
+          setScreenState('teacher-dash');
+        })
+        .catch(() => {
+          localStorage.removeItem('qt_token');
+        });
     }
   }, []);
 
@@ -2863,6 +2875,8 @@ ReactDOM.render(React.createElement(App), document.getElementById('root'));
     window.addEventListener('load', () => {
       setTimeout(() => document.getElementById('splash').classList.add('hidden'), 700);
     });
+    // Safety net: always hide splash after 1.5s even if React hasn't mounted yet
+    setTimeout(() => { var s = document.getElementById('splash'); if (s) s.classList.add('hidden'); }, 1500);
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
     }
