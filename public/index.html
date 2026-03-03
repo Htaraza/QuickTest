@@ -931,7 +931,12 @@ function TestList({ tests, onEdit, onDelete, onGrades, onSave, flash, onNew }) {
             <p style={S.cardMeta}>
               {test.questions?.length || 0} questions · {test.questions?.reduce((s, q) => s + (q.points || 0), 0)} pts
               {test.randomizeQuestions && <span style={{ marginLeft: "0.5rem", ...S.badge, background: "#ede9fc", color: "#6b21a8", fontSize: "0.7rem" }}>🔀 Randomized</span>}
-              {test.timeLimitMinutes && <span style={{ marginLeft: "0.5rem", ...S.badge, background: "#fff3cd", color: "#856404", fontSize: "0.7rem" }}>⏱ {test.timeLimitMinutes}m</span>}
+              {test.timeLimitMinutes > 0 && (() => {
+                const h = Math.floor(test.timeLimitMinutes / 60);
+                const m = test.timeLimitMinutes % 60;
+                const label = h > 0 && m > 0 ? `${h}h ${m}m` : h > 0 ? `${h}h` : `${m}m`;
+                return <span style={{ marginLeft: "0.5rem", ...S.badge, background: "#fff3cd", color: "#856404", fontSize: "0.7rem" }}>⏱ {label}</span>;
+              })()}
               {test.scheduledActivation && test.status === "draft" && <span style={{ marginLeft: "0.5rem", ...S.badge, background: "#e8f4fd", color: "#1a6fa8", fontSize: "0.7rem" }}>📅 {new Date(test.scheduledActivation).toLocaleString()}</span>}
             </p>
             <div style={{ background: "var(--cream)", borderRadius: "8px", padding: "0.6rem 0.8rem", marginBottom: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -966,7 +971,14 @@ function TestBuilder({ test, onSave, onCancel }) {
     test?.scheduledActivation ? new Date(test.scheduledActivation).toISOString().slice(0,16) : ""
   );
   const [useTimeLimit, setUseTimeLimit] = useState(!!(test?.timeLimitMinutes));
-  const [timeLimitMinutes, setTimeLimitMinutes] = useState(test?.timeLimitMinutes || 30);
+  // Store as hours + minutes separately; total = hours*60 + minutes
+  const [timeLimitHours, setTimeLimitHours] = useState(
+    test?.timeLimitMinutes ? Math.floor(test.timeLimitMinutes / 60) : 0
+  );
+  const [timeLimitMins, setTimeLimitMins] = useState(
+    test?.timeLimitMinutes ? test.timeLimitMinutes % 60 : 30
+  );
+  const timeLimitMinutes = timeLimitHours * 60 + timeLimitMins; // total minutes
   const [questions, setQuestions] = useState(test?.questions || []);
   const [err, setErr] = useState("");
   const [showPaste, setShowPaste] = useState(false);
@@ -1098,7 +1110,7 @@ function TestBuilder({ test, onSave, onCancel }) {
       allowCalculator,
       randomizeQuestions,
       scheduledActivation: useSchedule && scheduledActivation ? new Date(scheduledActivation).getTime() : null,
-      timeLimitMinutes: useTimeLimit ? timeLimitMinutes : null,
+      timeLimitMinutes: useTimeLimit && timeLimitMinutes > 0 ? timeLimitMinutes : null,
       questions: questions,
       code: test?.code || generateCode(),
       status: test?.status || "draft",
@@ -1194,18 +1206,40 @@ function TestBuilder({ test, onSave, onCancel }) {
               <span style={{ fontSize: "0.9rem", fontWeight: 600 }}>⏱ Set time limit</span>
             </label>
             {useTimeLimit ? (
-              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <input
-                  type="number" min="1" max="300" value={timeLimitMinutes}
-                  onChange={e => setTimeLimitMinutes(Math.max(1, Number(e.target.value)))}
-                  style={{ ...S.input, width: "80px" }}
-                />
-                <span style={{ fontSize: "0.9rem", color: "var(--muted)" }}>minutes</span>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    <input
+                      type="number" min="0" max="23" value={timeLimitHours}
+                      onChange={e => setTimeLimitHours(Math.max(0, Math.min(23, Number(e.target.value) || 0)))}
+                      style={{ ...S.input, width: "70px", textAlign: "center" }}
+                      placeholder="0"
+                    />
+                    <span style={{ fontSize: "0.9rem", color: "var(--muted)" }}>hr</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    <input
+                      type="number" min="0" max="59" value={timeLimitMins}
+                      onChange={e => setTimeLimitMins(Math.max(0, Math.min(59, Number(e.target.value) || 0)))}
+                      style={{ ...S.input, width: "70px", textAlign: "center" }}
+                      placeholder="0"
+                    />
+                    <span style={{ fontSize: "0.9rem", color: "var(--muted)" }}>min</span>
+                  </div>
+                </div>
+                {timeLimitMinutes === 0 && (
+                  <p style={{ fontSize: "0.78rem", color: "var(--danger)", marginTop: "0.3rem" }}>Please enter at least 1 minute.</p>
+                )}
+                {timeLimitMinutes > 0 && (
+                  <p style={{ fontSize: "0.78rem", color: "var(--muted)", marginTop: "0.3rem" }}>
+                    Limit: {timeLimitHours > 0 && timeLimitMins > 0 ? `${timeLimitHours}h ${timeLimitMins}m` : timeLimitHours > 0 ? `${timeLimitHours} hour${timeLimitHours !== 1 ? "s" : ""}` : `${timeLimitMins} minute${timeLimitMins !== 1 ? "s" : ""}`}
+                    {" · "}Test auto-submits when time runs out.
+                  </p>
+                )}
               </div>
             ) : (
               <p style={{ fontSize: "0.78rem", color: "var(--muted)" }}>No time limit — students can take as long as needed.</p>
             )}
-            {useTimeLimit && <p style={{ fontSize: "0.78rem", color: "var(--muted)", marginTop: "0.3rem" }}>Test auto-submits when time runs out. Students see a countdown timer.</p>}
           </div>
         </div>
       </div>
@@ -1929,8 +1963,12 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
 
   const formatTime = (secs) => {
     if (secs === null) return "";
-    const m = Math.floor(secs / 60);
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
     const s = secs % 60;
+    if (h > 0) {
+      return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+    }
     return `${m}:${s.toString().padStart(2, "0")}`;
   };
   const timerUrgent = timeLeft !== null && timeLeft <= 60;
