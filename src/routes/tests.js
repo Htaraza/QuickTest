@@ -34,7 +34,12 @@ async function buildTest(testRow) {
     title: testRow.title,
     description: testRow.description,
     inApp: testRow.in_app,
-    allowCalculator: testRow.allow_calculator || false,   // ← ADDED
+    allowCalculator: testRow.allow_calculator || false,
+    randomizeQuestions: testRow.randomize_questions || false,
+    scheduledActivation: testRow.scheduled_activation
+      ? new Date(testRow.scheduled_activation).getTime()
+      : null,
+    timeLimitMinutes: testRow.time_limit_minutes || null,
     code: testRow.code,
     status: testRow.status,
     createdAt: new Date(testRow.created_at).getTime(),
@@ -75,7 +80,10 @@ router.post('/', authMiddleware, async (req, res) => {
       title,
       description = '',
       inApp = true,
-      allowCalculator = false,               // ← ADDED
+      allowCalculator = false,
+      randomizeQuestions = false,
+      scheduledActivation = null,
+      timeLimitMinutes = null,
       questions = [],
       status = 'draft'
     } = req.body;
@@ -88,7 +96,12 @@ router.post('/', authMiddleware, async (req, res) => {
         title: title.trim(),
         description: description.trim(),
         in_app: inApp,
-        allow_calculator: allowCalculator,   // ← ADDED
+        allow_calculator: allowCalculator,
+        randomize_questions: randomizeQuestions,
+        scheduled_activation: scheduledActivation
+          ? new Date(scheduledActivation).toISOString()
+          : null,
+        time_limit_minutes: timeLimitMinutes || null,
         code,
         status
       })
@@ -126,7 +139,11 @@ router.put('/:id', authMiddleware, async (req, res) => {
       .eq('id', req.params.id).eq('teacher_id', req.teacher.id).maybeSingle();
     if (!existing) return res.status(404).json({ error: 'Test not found' });
 
-    const { title, description, inApp, allowCalculator, questions, status, code } = req.body;
+    const {
+      title, description, inApp, allowCalculator,
+      randomizeQuestions, scheduledActivation, timeLimitMinutes,
+      questions, status, code
+    } = req.body;
 
     // Check code uniqueness if changing
     if (code && code !== existing.code) {
@@ -138,7 +155,13 @@ router.put('/:id', authMiddleware, async (req, res) => {
     if (title !== undefined) updates.title = title;
     if (description !== undefined) updates.description = description;
     if (inApp !== undefined) updates.in_app = inApp;
-    if (allowCalculator !== undefined) updates.allow_calculator = allowCalculator;  // ← ADDED
+    if (allowCalculator !== undefined) updates.allow_calculator = allowCalculator;
+    if (randomizeQuestions !== undefined) updates.randomize_questions = randomizeQuestions;
+    if (scheduledActivation !== undefined)
+      updates.scheduled_activation = scheduledActivation
+        ? new Date(scheduledActivation).toISOString()
+        : null;
+    if (timeLimitMinutes !== undefined) updates.time_limit_minutes = timeLimitMinutes || null;
     if (status !== undefined) updates.status = status;
     if (code !== undefined) updates.code = code;
     updates.updated_at = new Date().toISOString();
@@ -179,7 +202,7 @@ router.delete('/:id', authMiddleware, async (req, res) => {
   const { data: row } = await supabase.from('tests').select('id')
     .eq('id', req.params.id).eq('teacher_id', req.teacher.id).maybeSingle();
   if (!row) return res.status(404).json({ error: 'Test not found' });
-  await supabase.from('questions').delete().eq('test_id', req.params.id); // ← clean up questions too
+  await supabase.from('questions').delete().eq('test_id', req.params.id);
   await supabase.from('tests').delete().eq('id', req.params.id);
   res.json({ success: true });
 });
@@ -191,11 +214,20 @@ router.get('/by-code/:code', async (req, res) => {
   if (!row) return res.status(404).json({ error: 'Invalid or inactive test code' });
 
   const test = await buildTest(row);
-  // Strip correct answers for student but keep all other fields
+
+  // Check scheduled activation — even if status is active, block if not open yet
+  if (test.scheduledActivation && Date.now() < test.scheduledActivation) {
+    return res.status(403).json({
+      error: 'Test not open yet',
+      scheduledActivation: test.scheduledActivation
+    });
+  }
+
+  // Strip correct answers — students must not see the answer key
   res.json({
     test: {
       ...test,
-      questions: test.questions.map(({ correctAnswers, ...rest }) => rest)  // ← keeps id, type, text, points, options
+      questions: test.questions.map(({ correctAnswers, ...rest }) => rest)
     }
   });
 });
