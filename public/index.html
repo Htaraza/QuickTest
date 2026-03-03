@@ -1859,8 +1859,13 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
     const percentage = totalPoints > 0 ? Math.round((totalScore / totalPoints) * 100) : 0;
     try {
       const res = await apiFetch('/submissions', { method: 'POST', body: { testId: test.id, studentEmail: email, answers: graded } });
-      // Use local graded for per-question display (correct highlighting) but server totals for score
-      setResult({ totalScore: res.totalScore ?? totalScore, totalPoints: res.totalPoints ?? totalPoints, percentage: res.percentage ?? percentage, graded });
+      // If server returned per-answer scores, use those (server has full answer key)
+      // Otherwise fall back to local grading
+      const serverAnswers = res.answers;
+      const displayGraded = (serverAnswers && serverAnswers.length === graded.length)
+        ? graded.map((a, i) => ({ ...a, autoScore: serverAnswers[i]?.autoScore ?? a.autoScore }))
+        : graded;
+      setResult({ totalScore: res.totalScore ?? totalScore, totalPoints: res.totalPoints ?? totalPoints, percentage: res.percentage ?? percentage, graded: displayGraded });
     } catch (e) {
       // Server save failed — still show result using local grading
       setResult({ totalScore, totalPoints, percentage, graded });
@@ -1873,8 +1878,13 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
 
   if (finished && result) {
     const hasEssay = test.questions.some(q => q.type === "essay");
-    // A math question is pending if it has no answer key AND got 0 (could be wrong or unkeyed)
-    const hasMathNoKey = test.questions.some((q, i) => q.type === "math" && result.graded[i]?.autoScore === 0 && (!q.correctAnswers || q.correctAnswers.length === 0 || !q.correctAnswers[0]));
+    // A math/short_answer question is pending only if it got 0 AND has no local answer key (server graded = has autoScore > 0)
+    const hasMathNoKey = test.questions.some((q, i) => {
+      if (q.type !== "math" && q.type !== "short_answer") return false;
+      const ans = result.graded[i];
+      const scored = ans?.autoScore > 0; // server graded it successfully
+      return !scored && (!q.correctAnswers || q.correctAnswers.length === 0 || !q.correctAnswers[0]);
+    });
     const allAutoGraded = !hasEssay && !hasMathNoKey;
 
     return (
@@ -1928,7 +1938,10 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
           <div style={{ display: "flex", justifyContent: "space-around", textAlign: "center", paddingTop: "0.5rem" }}>
             <div>
               <div style={{ fontSize: "1.4rem", fontFamily: "'DM Serif Display',serif" }}>
-                {result.graded.filter((a, i) => test.questions[i].type !== "essay" && a.autoScore > 0 && a.autoScore === test.questions[i].points).length}
+                {result.graded.filter((a, i) => {
+                  const q = test.questions[i];
+                  return q.type !== "essay" && a.autoScore === q.points && q.points > 0;
+                }).length}
               </div>
               <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.15rem" }}>Correct</div>
             </div>
@@ -1937,8 +1950,10 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
                 {result.graded.filter((a, i) => {
                   const q = test.questions[i];
                   if (q.type === "essay") return false;
-                  if (q.type === "math" && !q.correctAnswers?.length) return false; // unkeyed = pending not wrong
-                  return a.autoScore === 0;
+                  // Only wrong if: graded (has answer key or got some score before), but scored 0
+                  const wasGraded = q.correctAnswers?.length > 0 || result.graded.some((_, j) => j === i && test.questions[j].type !== "essay");
+                  const isPend = a.autoScore === 0 && !q.correctAnswers?.length && q.type !== "multiple_choice" && q.type !== "true_false" && q.type !== "multiple_select";
+                  return a.autoScore === 0 && !isPend;
                 }).length}
               </div>
               <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.15rem" }}>Incorrect</div>
@@ -1946,7 +1961,12 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
             {(hasEssay || hasMathNoKey) && (
               <div>
                 <div style={{ fontSize: "1.4rem", fontFamily: "'DM Serif Display',serif" }}>
-                  {result.graded.filter((_, i) => test.questions[i].type === "essay" || (test.questions[i].type === "math" && (!test.questions[i].correctAnswers?.length || !test.questions[i].correctAnswers[0]))).length}
+                  {result.graded.filter((a, i) => {
+                    const q = test.questions[i];
+                    if (q.type === "essay") return true;
+                    if (a.autoScore === q.points && q.points > 0) return false; // correctly graded
+                    return a.autoScore === 0 && !q.correctAnswers?.length && q.type !== "multiple_choice" && q.type !== "true_false" && q.type !== "multiple_select";
+                  }).length}
                 </div>
                 <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.15rem" }}>Pending</div>
               </div>
@@ -1969,10 +1989,14 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
             // If autoScore > 0 → definitely graded correctly (at least partial)
             // If essay → always pending (teacher grades manually)
             // If math/short_answer with autoScore === 0: check if we had a correct answer key locally
-            const hasCorrect = q.correctAnswers?.length > 0 || ans.autoScore > 0;
+            // isCorrect: server graded it and gave full points
             const isCorrect = !isEssay && ans.autoScore === q.points && q.points > 0;
-            const isPending = isEssay || (isMath && !isCorrect && ans.autoScore === 0 && !q.correctAnswers?.length);
-            const isWrong = !isPending && !isCorrect && (q.correctAnswers?.length > 0 || ans.autoScore === 0);
+            // isPending: essay (always manual), OR math/short_answer with no local key AND server gave 0
+            // If server gave points (autoScore > 0), it's NOT pending — it was graded
+            const isPending = isEssay || (!isCorrect && ans.autoScore === 0 && !q.correctAnswers?.length && q.type !== 'multiple_choice' && q.type !== 'true_false' && q.type !== 'multiple_select');
+            // hasCorrect: we have enough info to show correct/wrong (either local key or server graded it)
+            const hasCorrect = q.correctAnswers?.length > 0 || ans.autoScore > 0 || isCorrect;
+            const isWrong = !isPending && !isCorrect && hasCorrect;
 
             const borderColor = isPending ? "#b8860b" : isCorrect ? "#2d6a4f" : isWrong ? "#c84b31" : "var(--border)";
 
