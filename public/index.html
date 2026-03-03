@@ -973,12 +973,13 @@ function TestBuilder({ test, onSave, onCancel }) {
   const [useTimeLimit, setUseTimeLimit] = useState(!!(test?.timeLimitMinutes));
   // Store as hours + minutes separately; total = hours*60 + minutes
   const [timeLimitHours, setTimeLimitHours] = useState(
-    test?.timeLimitMinutes ? Math.floor(test.timeLimitMinutes / 60) : 0
+    test?.timeLimitMinutes ? String(Math.floor(test.timeLimitMinutes / 60)) : "0"
   );
   const [timeLimitMins, setTimeLimitMins] = useState(
-    test?.timeLimitMinutes ? test.timeLimitMinutes % 60 : 30
+    test?.timeLimitMinutes ? String(test.timeLimitMinutes % 60) : "30"
   );
-  const timeLimitMinutes = timeLimitHours * 60 + timeLimitMins; // total minutes
+  // Parse to numbers for calculation — empty string treated as 0
+  const timeLimitMinutes = (parseInt(timeLimitHours, 10) || 0) * 60 + (parseInt(timeLimitMins, 10) || 0);
   const [questions, setQuestions] = useState(test?.questions || []);
   const [err, setErr] = useState("");
   const [showPaste, setShowPaste] = useState(false);
@@ -1211,7 +1212,11 @@ function TestBuilder({ test, onSave, onCancel }) {
                   <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
                     <input
                       type="number" min="0" max="23" value={timeLimitHours}
-                      onChange={e => setTimeLimitHours(Math.max(0, Math.min(23, Number(e.target.value) || 0)))}
+                      onChange={e => setTimeLimitHours(e.target.value)}
+                      onBlur={e => {
+                        const v = Math.max(0, Math.min(23, parseInt(e.target.value, 10) || 0));
+                        setTimeLimitHours(String(v));
+                      }}
                       style={{ ...S.input, width: "70px", textAlign: "center" }}
                       placeholder="0"
                     />
@@ -1220,7 +1225,11 @@ function TestBuilder({ test, onSave, onCancel }) {
                   <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
                     <input
                       type="number" min="0" max="59" value={timeLimitMins}
-                      onChange={e => setTimeLimitMins(Math.max(0, Math.min(59, Number(e.target.value) || 0)))}
+                      onChange={e => setTimeLimitMins(e.target.value)}
+                      onBlur={e => {
+                        const v = Math.max(0, Math.min(59, parseInt(e.target.value, 10) || 0));
+                        setTimeLimitMins(String(v));
+                      }}
                       style={{ ...S.input, width: "70px", textAlign: "center" }}
                       placeholder="0"
                     />
