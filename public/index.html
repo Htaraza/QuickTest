@@ -866,7 +866,7 @@ function TeacherDashboard({ teacher, onLogout }) {
       <div style={S.main}>
         {msg && <div style={{ ...S.success, position: "fixed", top: "1rem", right: "1rem", zIndex: 999 }}>{msg}</div>}
         {view === "tests" && <TestList tests={tests} onEdit={t => { setEditingTest(tests.find(x => x.id === t.id) || t); setView("edit"); }} onDelete={deleteTest} onGrades={t => { setSelectedTestId(t.id); setView("grades"); }} onSave={saveTest} flash={flash} onNew={() => setView("create")} />}
-        {(view === "create" || view === "edit") && <TestBuilder test={editingTest} onSave={async (t) => { flash("Test saved!"); await saveTest(t); }} onCancel={() => setView("tests")} />}
+        {(view === "create" || view === "edit") && <TestBuilder key={editingTest?.id || "new"} test={editingTest} onSave={async (t) => { flash("Test saved!"); await saveTest(t); }} onCancel={() => setView("tests")} />}
         {view === "grades" && <GradesView testId={selectedTestId} tests={tests} onBack={() => setView("tests")} flash={flash} />}
         {view === "decks" && <DeckList decks={decks} onEdit={d => { setEditingDeck(d); setView("edit-deck"); }} onDelete={deleteDeck} onSave={saveDeck} flash={flash} onNew={() => { setEditingDeck(null); setView("create-deck"); }} />}
         {(view === "create-deck" || view === "edit-deck") && <DeckBuilder deck={editingDeck} onSave={async (d) => { flash("Deck saved!"); await saveDeck(d); }} onCancel={() => setView("decks")} />}
