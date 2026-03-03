@@ -65,6 +65,33 @@ router.get('/', authMiddleware, async (req, res) => {
   res.json({ tests });
 });
 
+// IMPORTANT: /by-code/:code MUST come before /:id — otherwise Express matches
+// "by-code" as the :id parameter and this route is never reached.
+// GET /api/tests/by-code/:code — student access (no auth)
+router.get('/by-code/:code', async (req, res) => {
+  const { data: row } = await supabase.from('tests').select('*')
+    .eq('code', req.params.code.toUpperCase()).eq('status', 'active').maybeSingle();
+  if (!row) return res.status(404).json({ error: 'Invalid or inactive test code' });
+
+  const test = await buildTest(row);
+
+  // Check scheduled activation — even if status is active, block if not open yet
+  if (test.scheduledActivation && Date.now() < test.scheduledActivation) {
+    return res.status(403).json({
+      error: 'Test not open yet',
+      scheduledActivation: test.scheduledActivation
+    });
+  }
+
+  // Strip correct answers — students must not see the answer key
+  res.json({
+    test: {
+      ...test,
+      questions: test.questions.map(({ correctAnswers, ...rest }) => rest)
+    }
+  });
+});
+
 // GET /api/tests/:id
 router.get('/:id', authMiddleware, async (req, res) => {
   const { data: row } = await supabase.from('tests').select('*')
@@ -205,31 +232,6 @@ router.delete('/:id', authMiddleware, async (req, res) => {
   await supabase.from('questions').delete().eq('test_id', req.params.id);
   await supabase.from('tests').delete().eq('id', req.params.id);
   res.json({ success: true });
-});
-
-// GET /api/tests/by-code/:code — student access (no auth)
-router.get('/by-code/:code', async (req, res) => {
-  const { data: row } = await supabase.from('tests').select('*')
-    .eq('code', req.params.code.toUpperCase()).eq('status', 'active').maybeSingle();
-  if (!row) return res.status(404).json({ error: 'Invalid or inactive test code' });
-
-  const test = await buildTest(row);
-
-  // Check scheduled activation — even if status is active, block if not open yet
-  if (test.scheduledActivation && Date.now() < test.scheduledActivation) {
-    return res.status(403).json({
-      error: 'Test not open yet',
-      scheduledActivation: test.scheduledActivation
-    });
-  }
-
-  // Strip correct answers — students must not see the answer key
-  res.json({
-    test: {
-      ...test,
-      questions: test.questions.map(({ correctAnswers, ...rest }) => rest)
-    }
-  });
 });
 
 module.exports = router;
