@@ -290,7 +290,12 @@ async function _realFetch(path, options = {}) {
     });
     clearTimeout(timer);
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Request failed');
+    if (!res.ok) {
+      const err = new Error(data.error || 'Request failed');
+      // Attach any extra fields from the error body (e.g. scheduledActivation)
+      Object.assign(err, data);
+      throw err;
+    }
     return data;
   } catch (e) {
     clearTimeout(timer);
@@ -657,7 +662,20 @@ function StudentLogin({ onEnter, onBack }) {
       const data = await apiFetch('/tests/by-code/' + code.toUpperCase());
       foundTest = data.test;
     } catch (e) {
-      setErr("Invalid or inactive test code."); setLoading(false); return;
+      // Server returns 403 with scheduledActivation when test exists but isn't open yet
+      if (e.scheduledActivation) {
+        const openAt = new Date(e.scheduledActivation).toLocaleString();
+        setErr(`This test is not open yet. It will be available on ${openAt}.`);
+      } else {
+        setErr("Invalid or inactive test code.");
+      }
+      setLoading(false); return;
+    }
+    // Double-check schedule on the client side (covers mock mode)
+    if (foundTest.scheduledActivation && Date.now() < foundTest.scheduledActivation) {
+      const openAt = new Date(foundTest.scheduledActivation).toLocaleString();
+      setErr(`This test is not open yet. It will be available on ${openAt}.`);
+      setLoading(false); return;
     }
     // check if student already submitted
     try {
@@ -858,6 +876,21 @@ function TeacherDashboard({ teacher, onLogout }) {
 }
 // ─── TEST LIST ────────────────────────────────────────────────────────────────
 function TestList({ tests, onEdit, onDelete, onGrades, onSave, flash, onNew }) {
+  // Poll every 30s to auto-activate scheduled tests
+  useEffect(() => {
+    const check = () => {
+      const now = Date.now();
+      tests.forEach(test => {
+        if (test.status === "draft" && test.scheduledActivation && test.scheduledActivation <= now) {
+          onSave({ ...test, status: "active" }, true);
+        }
+      });
+    };
+    check(); // run immediately on mount
+    const interval = setInterval(check, 30000);
+    return () => clearInterval(interval);
+  }, [tests, onSave]);
+
   const toggleStatus = async (test) => {
     const newStatus = test.status === "active" ? "closed" : "active";
     await onSave({ ...test, status: newStatus }, true);
@@ -898,6 +931,8 @@ function TestList({ tests, onEdit, onDelete, onGrades, onSave, flash, onNew }) {
             <p style={S.cardMeta}>
               {test.questions?.length || 0} questions · {test.questions?.reduce((s, q) => s + (q.points || 0), 0)} pts
               {test.randomizeQuestions && <span style={{ marginLeft: "0.5rem", ...S.badge, background: "#ede9fc", color: "#6b21a8", fontSize: "0.7rem" }}>🔀 Randomized</span>}
+              {test.timeLimitMinutes && <span style={{ marginLeft: "0.5rem", ...S.badge, background: "#fff3cd", color: "#856404", fontSize: "0.7rem" }}>⏱ {test.timeLimitMinutes}m</span>}
+              {test.scheduledActivation && test.status === "draft" && <span style={{ marginLeft: "0.5rem", ...S.badge, background: "#e8f4fd", color: "#1a6fa8", fontSize: "0.7rem" }}>📅 {new Date(test.scheduledActivation).toLocaleString()}</span>}
             </p>
             <div style={{ background: "var(--cream)", borderRadius: "8px", padding: "0.6rem 0.8rem", marginBottom: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Code:</span>
@@ -926,6 +961,12 @@ function TestBuilder({ test, onSave, onCancel }) {
   const [inApp, setInApp] = useState(test?.inApp !== false);
   const [allowCalculator, setAllowCalculator] = useState(test?.allowCalculator || false);
   const [randomizeQuestions, setRandomizeQuestions] = useState(test?.randomizeQuestions || false);
+  const [useSchedule, setUseSchedule] = useState(!!(test?.scheduledActivation));
+  const [scheduledActivation, setScheduledActivation] = useState(
+    test?.scheduledActivation ? new Date(test.scheduledActivation).toISOString().slice(0,16) : ""
+  );
+  const [useTimeLimit, setUseTimeLimit] = useState(!!(test?.timeLimitMinutes));
+  const [timeLimitMinutes, setTimeLimitMinutes] = useState(test?.timeLimitMinutes || 30);
   const [questions, setQuestions] = useState(test?.questions || []);
   const [err, setErr] = useState("");
   const [showPaste, setShowPaste] = useState(false);
@@ -1056,6 +1097,8 @@ function TestBuilder({ test, onSave, onCancel }) {
       inApp,
       allowCalculator,
       randomizeQuestions,
+      scheduledActivation: useSchedule && scheduledActivation ? new Date(scheduledActivation).getTime() : null,
+      timeLimitMinutes: useTimeLimit ? timeLimitMinutes : null,
       questions: questions,
       code: test?.code || generateCode(),
       status: test?.status || "draft",
@@ -1117,6 +1160,53 @@ function TestBuilder({ test, onSave, onCancel }) {
           <span style={{ color: "var(--muted)", fontSize: "0.85rem" }}>
             {randomizeQuestions ? "Each student gets questions in a unique random order" : "All students see questions in the same order"}
           </span>
+        </div>
+
+        {/* ── Scheduling + Time Limit row ── */}
+        <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap", marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--border)" }}>
+          {/* Scheduled Activation */}
+          <div style={{ flex: 1, minWidth: "240px" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer", marginBottom: "0.5rem" }}>
+              <input type="checkbox" checked={useSchedule} onChange={e => setUseSchedule(e.target.checked)} />
+              <span style={{ fontSize: "0.9rem", fontWeight: 600 }}>📅 Schedule activation</span>
+            </label>
+            {useSchedule ? (
+              <div>
+                <input
+                  type="datetime-local"
+                  value={scheduledActivation}
+                  onChange={e => setScheduledActivation(e.target.value)}
+                  style={{ ...S.input, fontSize: "0.9rem" }}
+                />
+                <p style={{ fontSize: "0.78rem", color: "var(--muted)", marginTop: "0.3rem" }}>
+                  Test will automatically activate at this date & time. Status stays "draft" until then.
+                </p>
+              </div>
+            ) : (
+              <p style={{ fontSize: "0.78rem", color: "var(--muted)" }}>Activate the test manually whenever you're ready.</p>
+            )}
+          </div>
+
+          {/* Time Limit */}
+          <div style={{ flex: 1, minWidth: "220px" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer", marginBottom: "0.5rem" }}>
+              <input type="checkbox" checked={useTimeLimit} onChange={e => setUseTimeLimit(e.target.checked)} />
+              <span style={{ fontSize: "0.9rem", fontWeight: 600 }}>⏱ Set time limit</span>
+            </label>
+            {useTimeLimit ? (
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input
+                  type="number" min="1" max="300" value={timeLimitMinutes}
+                  onChange={e => setTimeLimitMinutes(Math.max(1, Number(e.target.value)))}
+                  style={{ ...S.input, width: "80px" }}
+                />
+                <span style={{ fontSize: "0.9rem", color: "var(--muted)" }}>minutes</span>
+              </div>
+            ) : (
+              <p style={{ fontSize: "0.78rem", color: "var(--muted)" }}>No time limit — students can take as long as needed.</p>
+            )}
+            {useTimeLimit && <p style={{ fontSize: "0.78rem", color: "var(--muted)", marginTop: "0.3rem" }}>Test auto-submits when time runs out. Students see a countdown timer.</p>}
+          </div>
         </div>
       </div>
 
@@ -1785,16 +1875,13 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
   const [currentQ, setCurrentQ] = useState(0);
   const [answers, setAnswers] = useState(Array(test.questions.length).fill(null).map(() => ({ value: null }))); // length same regardless of order
 
-  // If randomizeQuestions is enabled, shuffle the order once on mount (each student gets a unique order)
+  // If randomizeQuestions is enabled, shuffle the order once on mount using Fisher-Yates
+  // Each page load produces a unique random order for that student
   const [questionOrder] = useState(() => {
     const order = test.questions.map((_, i) => i);
     if (test.randomizeQuestions) {
-      // Fisher-Yates shuffle seeded by email so the same student always sees the same order on retry
-      // but different students see different orders
       for (let i = order.length - 1; i > 0; i--) {
-        // Use a hash of email + question index as a pseudo-random seed
-        const seed = [...(email + i)].reduce((h, c) => (Math.imul(31, h) + c.charCodeAt(0)) | 0, 0);
-        const j = Math.abs(seed) % (i + 1);
+        const j = Math.floor(Math.random() * (i + 1));
         [order[i], order[j]] = [order[j], order[i]];
       }
     }
@@ -1805,6 +1892,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
   const orderedQuestions = questionOrder.map(i => test.questions[i]);
   const [finished, setFinished] = useState(false);
   const finishedRef = useRef(false);
+  const finishRef = useRef(null);
   const [result, setResult] = useState(null);
   const [showDropdown, setShowDropdown] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -1814,12 +1902,49 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
   const hasMathQ = orderedQuestions.some(q => q.type === "math");
   const calculatorAllowed = test.allowCalculator || hasMathQ;
 
+  // ── Timer ──
+  const hasTimeLimit = !!(test.timeLimitMinutes);
+  const [timeLeft, setTimeLeft] = useState(hasTimeLimit ? test.timeLimitMinutes * 60 : null);
+  const [timerMinimized, setTimerMinimized] = useState(false);
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    if (!hasTimeLimit || finishedRef.current) return;
+    timerRef.current = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(timerRef.current);
+          // Time's up — auto-submit
+          if (!finishedRef.current && !invalidatedRef.current) {
+            setShowConfirm(false);
+            if (finishRef.current) finishRef.current();
+          }
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timerRef.current);
+  }, [hasTimeLimit]);
+
+  const formatTime = (secs) => {
+    if (secs === null) return "";
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
+  const timerUrgent = timeLeft !== null && timeLeft <= 60;
+  const timerWarning = timeLeft !== null && timeLeft <= 300 && timeLeft > 60;
+
   const handleInvalidate = async () => {
     try {
       await apiFetch('/submissions', { method: 'POST', body: { testId: test.id, studentEmail: email, answers: [], invalidated: true } });
     } catch (e) { /* best effort */ }
     onInvalidate();
   };
+
+  // Keep finish in a ref so the timer can call it without stale closure issues
+  useEffect(() => { finishRef.current = finish; });
 
   // Keep a ref to the latest handleInvalidate so the visibility effect never captures a stale closure
   const handleInvalidateRef = useRef(handleInvalidate);
@@ -1850,6 +1975,8 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
   };
 
   const finish = async () => {
+    if (finishedRef.current) return; // prevent double-submission (timer + manual)
+    if (timerRef.current) clearInterval(timerRef.current);
     setSubmitting(true);
     setShowConfirm(false);
     // Grade locally using ordered questions (as student saw them)
@@ -2075,24 +2202,32 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
                     <div>
                       {(q.type === "true_false" ? ["True", "False"] : q.options).map((opt, j) => {
                         const wasSelected = ans.value === opt;
-                        const isCorrectOpt = q.correctAnswers?.includes(opt);
+                        const isCorrectOpt = q.correctAnswers?.includes(opt); // may be empty if server stripped
+                        // Use autoScore to determine if student got the question right overall
+                        const questionCorrect = isCorrect; // from outer scope: ans.autoScore === q.points
                         let optBg = "var(--white)", optBorder = "var(--border)", optColor = "var(--ink)";
-                        if (!hasCorrect) {
-                          // No answer key: just highlight selected in neutral ink
-                          if (wasSelected) { optBg = "var(--cream)"; optBorder = "var(--ink)"; }
-                        } else {
-                          if (wasSelected && isCorrectOpt) { optBg = "#d4edda"; optBorder = "#2d6a4f"; optColor = "#2d6a4f"; }
-                          else if (wasSelected && !isCorrectOpt) { optBg = "#fde8e4"; optBorder = "#c84b31"; optColor = "#c84b31"; }
-                          else if (!wasSelected && isCorrectOpt) { optBg = "#edf7f1"; optBorder = "#2d6a4f"; optColor = "#2d6a4f"; }
+                        if (wasSelected) {
+                          if (questionCorrect) {
+                            // Student got it right — their selection must be correct
+                            optBg = "#d4edda"; optBorder = "#2d6a4f"; optColor = "#2d6a4f";
+                          } else if (isWrong) {
+                            // Student got it wrong — their selection is wrong
+                            optBg = "#fde8e4"; optBorder = "#c84b31"; optColor = "#c84b31";
+                          } else {
+                            optBg = "var(--cream)"; optBorder = "var(--ink)";
+                          }
+                        } else if (isCorrectOpt) {
+                          // We have local correctAnswers — show the correct option
+                          optBg = "#edf7f1"; optBorder = "#2d6a4f"; optColor = "#2d6a4f";
                         }
                         return (
                           <div key={j} style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.6rem 0.9rem", border: `1.5px solid ${optBorder}`, borderRadius: "8px", background: optBg, marginBottom: "0.4rem", color: optColor, fontSize: "0.9rem" }}>
                             <span style={{ fontWeight: 600, opacity: 0.6, minWidth: "16px" }}>{String.fromCharCode(65 + j)}.</span>
                             <span style={{ flex: 1 }}>{opt}</span>
-                            {hasCorrect && wasSelected && isCorrectOpt && <span>✓</span>}
-                            {hasCorrect && wasSelected && !isCorrectOpt && <span>✗</span>}
-                            {hasCorrect && !wasSelected && isCorrectOpt && <span style={{ fontSize: "0.75rem" }}>← correct</span>}
-                            {!hasCorrect && wasSelected && <span style={{ fontSize: "0.75rem", opacity: 0.5 }}>your answer</span>}
+                            {wasSelected && questionCorrect && <span>✓</span>}
+                            {wasSelected && isWrong && <span>✗</span>}
+                            {!wasSelected && isCorrectOpt && <span style={{ fontSize: "0.75rem" }}>← correct</span>}
+                            {!hasCorrect && wasSelected && !questionCorrect && !isWrong && <span style={{ fontSize: "0.75rem", opacity: 0.5 }}>your answer</span>}
                           </div>
                         );
                       })}
@@ -2104,21 +2239,22 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
                       {q.options.map((opt, j) => {
                         const wasSelected = Array.isArray(ans.value) && ans.value.includes(opt);
                         const isCorrectOpt = q.correctAnswers?.includes(opt);
+                        const questionCorrect = isCorrect;
                         let optBg = "var(--white)", optBorder = "var(--border)", optColor = "var(--ink)";
-                        if (!hasCorrect) {
-                          if (wasSelected) { optBg = "var(--cream)"; optBorder = "var(--ink)"; }
-                        } else {
-                          if (wasSelected && isCorrectOpt) { optBg = "#d4edda"; optBorder = "#2d6a4f"; optColor = "#2d6a4f"; }
-                          else if (wasSelected && !isCorrectOpt) { optBg = "#fde8e4"; optBorder = "#c84b31"; optColor = "#c84b31"; }
-                          else if (!wasSelected && isCorrectOpt) { optBg = "#edf7f1"; optBorder = "#2d6a4f"; optColor = "#2d6a4f"; }
+                        if (wasSelected) {
+                          if (questionCorrect) { optBg = "#d4edda"; optBorder = "#2d6a4f"; optColor = "#2d6a4f"; }
+                          else if (isWrong) { optBg = "#fde8e4"; optBorder = "#c84b31"; optColor = "#c84b31"; }
+                          else { optBg = "var(--cream)"; optBorder = "var(--ink)"; }
+                        } else if (isCorrectOpt) {
+                          optBg = "#edf7f1"; optBorder = "#2d6a4f"; optColor = "#2d6a4f";
                         }
                         return (
                           <div key={j} style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.6rem 0.9rem", border: `1.5px solid ${optBorder}`, borderRadius: "8px", background: optBg, marginBottom: "0.4rem", color: optColor, fontSize: "0.9rem" }}>
                             <span>{wasSelected ? "☑" : "☐"}</span>
                             <span style={{ flex: 1 }}>{opt}</span>
-                            {hasCorrect && wasSelected && isCorrectOpt && <span>✓</span>}
-                            {hasCorrect && wasSelected && !isCorrectOpt && <span>✗</span>}
-                            {hasCorrect && !wasSelected && isCorrectOpt && <span style={{ fontSize: "0.75rem" }}>← should select</span>}
+                            {wasSelected && questionCorrect && <span>✓</span>}
+                            {wasSelected && isWrong && <span>✗</span>}
+                            {!wasSelected && isCorrectOpt && <span style={{ fontSize: "0.75rem" }}>← should select</span>}
                           </div>
                         );
                       })}
@@ -2191,13 +2327,46 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
         </div>
       )}
       <div style={S.testCard}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: hasTimeLimit ? "0.5rem" : "1rem" }}>
           <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>
             {test.title}
             {test.randomizeQuestions && <span style={{ marginLeft: "0.5rem", fontSize: "0.72rem", background: "#ede9fc", color: "#6b21a8", borderRadius: "10px", padding: "0.1rem 0.45rem", fontWeight: 600 }}>🔀</span>}
           </span>
           <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>{email}</span>
         </div>
+
+        {/* ── Countdown Timer ── */}
+        {hasTimeLimit && !finished && (
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            marginBottom: "1rem", padding: timerMinimized ? "0.35rem 0.75rem" : "0.6rem 1rem",
+            borderRadius: "10px", transition: "all 0.2s",
+            background: timerUrgent ? "#fde8e4" : timerWarning ? "#fff3cd" : "var(--cream)",
+            border: `1.5px solid ${timerUrgent ? "#c84b31" : timerWarning ? "#e6b800" : "var(--border)"}`,
+          }}>
+            {timerMinimized ? (
+              <>
+                <span style={{ fontSize: "0.75rem", color: timerUrgent ? "#c84b31" : "var(--muted)", fontWeight: 600 }}>⏱ Timer hidden</span>
+                <button onClick={() => setTimerMinimized(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "0.75rem", color: "var(--muted)", padding: "0 0.25rem" }}>Show ▾</button>
+              </>
+            ) : (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                  <span style={{ fontSize: "1.3rem" }}>{timerUrgent ? "🚨" : timerWarning ? "⚠️" : "⏱"}</span>
+                  <div>
+                    <div style={{ fontSize: "1.6rem", fontFamily: "monospace", fontWeight: 700, lineHeight: 1, color: timerUrgent ? "#c84b31" : timerWarning ? "#856404" : "var(--ink)", letterSpacing: "0.05em" }}>
+                      {formatTime(timeLeft)}
+                    </div>
+                    <div style={{ fontSize: "0.7rem", color: "var(--muted)", marginTop: "0.1rem" }}>
+                      {timerUrgent ? "Less than 1 minute left!" : timerWarning ? "Less than 5 minutes left" : "Time remaining"}
+                    </div>
+                  </div>
+                </div>
+                <button onClick={() => setTimerMinimized(true)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "0.75rem", color: "var(--muted)", padding: "0.2rem 0.4rem", borderRadius: "4px" }} title="Hide timer">Hide ▲</button>
+              </>
+            )}
+          </div>
+        )}
         <div style={S.progressBar}>
           <div style={{ ...S.progressFill, width: `${progress}%` }} />
         </div>
