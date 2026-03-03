@@ -14,17 +14,41 @@ function gradeSubmission(questions, answers) {
     const correct = q.correct_answers || [];
 
     if (q.type === 'multiple_choice' || q.type === 'true_false') {
-      if (correct.length > 0 && a.value === correct[0]) autoScore = q.points;
+      // Case-insensitive + trimmed (original was strict === which broke on whitespace/case)
+      const given = (a.value || '').trim().toLowerCase();
+      const expected = (correct[0] || '').trim().toLowerCase();
+      if (expected && given === expected) autoScore = q.points;
+
     } else if (q.type === 'multiple_select') {
-      const cSet = new Set(correct);
-      const gSet = new Set(Array.isArray(a.value) ? a.value : []);
+      const cSet = new Set(correct.map(x => x.trim().toLowerCase()));
+      const gSet = new Set((Array.isArray(a.value) ? a.value : []).map(x => x.trim().toLowerCase()));
       if (cSet.size > 0 && [...cSet].every(c => gSet.has(c)) && [...gSet].every(g => cSet.has(g)))
         autoScore = q.points;
+
     } else if (q.type === 'short_answer') {
+      const given = (a.value || '').toLowerCase().trim();
       const accepted = correct.map(x => x.toLowerCase().trim());
-      if (accepted.length > 0 && accepted.includes((a.value || '').toLowerCase().trim()))
+      if (accepted.length > 0 && accepted.includes(given))
         autoScore = q.points;
+
+    } else if (q.type === 'math') {
+      // ── THIS WAS MISSING — math always got autoScore 0 before ──
+      const given = (a.value || '').trim();
+      const accepted = correct.map(x => x.trim());
+      if (accepted.length > 0) {
+        // Exact case-insensitive match (handles expressions like "x+1", "2x")
+        const exactMatch = accepted.some(x => x.toLowerCase() === given.toLowerCase());
+        // Numeric equivalence: "4" matches "4.0", "4.00", ".5" matches "0.5"
+        const givenNum = parseFloat(given);
+        const numericMatch = given !== '' && !isNaN(givenNum) && accepted.some(x => {
+          const xNum = parseFloat(x);
+          return !isNaN(xNum) && Math.abs(givenNum - xNum) < 0.0001;
+        });
+        if (exactMatch || numericMatch) autoScore = q.points;
+      }
     }
+    // essay: autoScore stays 0 — teacher grades manually
+
     return { ...a, autoScore };
   });
 }
@@ -43,7 +67,7 @@ router.post('/', async (req, res) => {
     if (existing && !existing.retake_allowed)
       return res.status(409).json({ error: 'Already submitted. Contact teacher to retake.' });
 
-    // Get questions for grading
+    // Fetch full questions including correct_answers (students never receive these directly)
     const { data: questions } = await supabase.from('questions').select('*')
       .eq('test_id', testId).order('sort_order');
 
@@ -61,16 +85,25 @@ router.post('/', async (req, res) => {
     let result;
     if (existing) {
       const { data } = await supabase.from('submissions')
-        .update({ answers: gradedAnswers, total_score: totalScore, total_points: totalPoints, percentage, invalidated, retake_allowed: false, submitted_at: new Date().toISOString() })
+        .update({
+          answers: gradedAnswers, total_score: totalScore, total_points: totalPoints,
+          percentage, invalidated, retake_allowed: false,
+          submitted_at: new Date().toISOString()
+        })
         .eq('id', existing.id).select().single();
       result = data;
     } else {
       const { data } = await supabase.from('submissions')
-        .insert({ test_id: testId, student_email: email, answers: gradedAnswers, total_score: totalScore, total_points: totalPoints, percentage, invalidated, retake_allowed: false })
+        .insert({
+          test_id: testId, student_email: email, answers: gradedAnswers,
+          total_score: totalScore, total_points: totalPoints,
+          percentage, invalidated, retake_allowed: false
+        })
         .select().single();
       result = data;
     }
 
+    // Return graded answers so the frontend can show correct/incorrect per question
     res.status(201).json({ success: true, totalScore, totalPoints, percentage, answers: gradedAnswers });
   } catch (err) {
     console.error('Submit:', err);
@@ -87,7 +120,7 @@ router.get('/check', async (req, res) => {
   res.json({ exists: !!data, retakeAllowed: !!data?.retake_allowed, invalidated: !!data?.invalidated });
 });
 
-// GET /api/submissions/test/:testId — teacher
+// GET /api/submissions/test/:testId — teacher only
 router.get('/test/:testId', authMiddleware, async (req, res) => {
   const { data: test } = await supabase.from('tests').select('id')
     .eq('id', req.params.testId).eq('teacher_id', req.teacher.id).maybeSingle();
@@ -111,33 +144,7 @@ router.get('/test/:testId', authMiddleware, async (req, res) => {
   });
 });
 
-// GET /api/submissions/student
-router.get('/student', async (req, res) => {
-  const { testId, email } = req.query;
-  if (!testId || !email) return res.status(400).json({ error: 'testId and email required' });
-
-  const { data: sub } = await supabase.from('submissions').select('*')
-    .eq('test_id', testId).eq('student_email', email.toLowerCase()).maybeSingle();
-  if (!sub) return res.status(404).json({ error: 'Submission not found' });
-
-  const { data: questions } = await supabase.from('questions').select('*')
-    .eq('test_id', testId).order('sort_order');
-
-  res.json({
-    submission: {
-      id: sub.id, email: sub.student_email, answers: sub.answers,
-      totalScore: sub.total_score, totalPoints: sub.total_points,
-      percentage: sub.percentage, invalidated: sub.invalidated,
-      submittedAt: new Date(sub.submitted_at).getTime()
-    },
-    questions: (questions || []).map(q => ({
-      id: q.id, type: q.type, text: q.text, points: q.points,
-      options: q.options, correctAnswers: q.correct_answers
-    }))
-  });
-});
-
-// PATCH /api/submissions/:id/grade
+// PATCH /api/submissions/:id/grade — teacher manually grades essay/unkeyed questions
 router.patch('/:id/grade', authMiddleware, async (req, res) => {
   try {
     const { data: sub } = await supabase.from('submissions').select('*').eq('id', req.params.id).maybeSingle();
@@ -167,7 +174,7 @@ router.patch('/:id/grade', authMiddleware, async (req, res) => {
   }
 });
 
-// PATCH /api/submissions/:id/retake
+// PATCH /api/submissions/:id/retake — teacher allows student to retake
 router.patch('/:id/retake', authMiddleware, async (req, res) => {
   const { data: sub } = await supabase.from('submissions').select('*').eq('id', req.params.id).maybeSingle();
   if (!sub) return res.status(404).json({ error: 'Submission not found' });
