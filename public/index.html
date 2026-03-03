@@ -1443,13 +1443,13 @@ function ScientificCalculator({ onClose }) {
             <Btn l="C" bg={clr} /><Btn l="±" bg={util} /><Btn l="%" bg={util} /><Btn l="⌫" bg={util} />
           </div>
           <div style={{ display: "flex", gap: "0.38rem" }}>
-            <Btn l="7" bg={num} /><Btn l="8" bg={num} /><Btn l="9" bg={num} /><Btn l="÷" bg={op} />
+            <Btn l="1" bg={num} /><Btn l="2" bg={num} /><Btn l="3" bg={num} /><Btn l="÷" bg={op} />
           </div>
           <div style={{ display: "flex", gap: "0.38rem" }}>
             <Btn l="4" bg={num} /><Btn l="5" bg={num} /><Btn l="6" bg={num} /><Btn l="×" bg={op} />
           </div>
           <div style={{ display: "flex", gap: "0.38rem" }}>
-            <Btn l="1" bg={num} /><Btn l="2" bg={num} /><Btn l="3" bg={num} /><Btn l="−" bg={op} />
+            <Btn l="7" bg={num} /><Btn l="8" bg={num} /><Btn l="9" bg={num} /><Btn l="−" bg={op} />
           </div>
           <div style={{ display: "flex", gap: "0.38rem" }}>
             <Btn l="0" bg={num} wide /><Btn l="." bg={num} /><Btn l="+" bg={op} /><Btn l="=" bg={eq} />
@@ -1471,13 +1471,13 @@ function ScientificCalculator({ onClose }) {
             <Btn l="log" bg={fn} title="Log base 10" /><Btn l="ln" bg={fn} title="Natural log" /><Btn l="abs" bg={fn} title="Absolute value" /><Btn l="e" bg={fn} title="Euler's number (2.718…)" />
           </div>
           <div style={{ display: "flex", gap: "0.38rem" }}>
-            <Btn l="7" bg={num} /><Btn l="8" bg={num} /><Btn l="9" bg={num} /><Btn l="=" bg={eq} />
+            <Btn l="1" bg={num} /><Btn l="2" bg={num} /><Btn l="3" bg={num} /><Btn l="=" bg={eq} />
           </div>
           <div style={{ display: "flex", gap: "0.38rem" }}>
             <Btn l="4" bg={num} /><Btn l="5" bg={num} /><Btn l="6" bg={num} /><Btn l="C" bg={clr} />
           </div>
           <div style={{ display: "flex", gap: "0.38rem" }}>
-            <Btn l="1" bg={num} /><Btn l="2" bg={num} /><Btn l="3" bg={num} /><Btn l="+" bg={op} />
+            <Btn l="7" bg={num} /><Btn l="8" bg={num} /><Btn l="9" bg={num} /><Btn l="+" bg={op} />
           </div>
           <div style={{ display: "flex", gap: "0.38rem" }}>
             <Btn l="0" bg={num} wide /><Btn l="." bg={num} /><Btn l="−" bg={op} />
@@ -1493,13 +1493,13 @@ function ScientificCalculator({ onClose }) {
             <Btn l="MC" bg={util} title="Clear memory" /><Btn l="MR" bg={util} title="Recall memory" /><Btn l="M+" bg={util} title="Add display to memory" />
           </div>
           <div style={{ display: "flex", gap: "0.38rem" }}>
-            <Btn l="7" bg={num} /><Btn l="8" bg={num} /><Btn l="9" bg={num} /><Btn l="÷" bg={op} />
+            <Btn l="1" bg={num} /><Btn l="2" bg={num} /><Btn l="3" bg={num} /><Btn l="÷" bg={op} />
           </div>
           <div style={{ display: "flex", gap: "0.38rem" }}>
             <Btn l="4" bg={num} /><Btn l="5" bg={num} /><Btn l="6" bg={num} /><Btn l="×" bg={op} />
           </div>
           <div style={{ display: "flex", gap: "0.38rem" }}>
-            <Btn l="1" bg={num} /><Btn l="2" bg={num} /><Btn l="3" bg={num} /><Btn l="−" bg={op} />
+            <Btn l="7" bg={num} /><Btn l="8" bg={num} /><Btn l="9" bg={num} /><Btn l="−" bg={op} />
           </div>
           <div style={{ display: "flex", gap: "0.38rem" }}>
             <Btn l="0" bg={num} wide /><Btn l="." bg={num} /><Btn l="+" bg={op} /><Btn l="=" bg={eq} />
@@ -1873,7 +1873,8 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
 
   if (finished && result) {
     const hasEssay = test.questions.some(q => q.type === "essay");
-    const hasMathNoKey = test.questions.some(q => q.type === "math" && (!q.correctAnswers || q.correctAnswers.length === 0 || !q.correctAnswers[0]));
+    // A math question is pending if it has no answer key AND got 0 (could be wrong or unkeyed)
+    const hasMathNoKey = test.questions.some((q, i) => q.type === "math" && result.graded[i]?.autoScore === 0 && (!q.correctAnswers || q.correctAnswers.length === 0 || !q.correctAnswers[0]));
     const allAutoGraded = !hasEssay && !hasMathNoKey;
 
     return (
@@ -1927,13 +1928,18 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
           <div style={{ display: "flex", justifyContent: "space-around", textAlign: "center", paddingTop: "0.5rem" }}>
             <div>
               <div style={{ fontSize: "1.4rem", fontFamily: "'DM Serif Display',serif" }}>
-                {result.graded.filter((a, i) => test.questions[i].type !== "essay" && test.questions[i].correctAnswers?.length > 0 && a.autoScore > 0 && a.autoScore === test.questions[i].points).length}
+                {result.graded.filter((a, i) => test.questions[i].type !== "essay" && a.autoScore > 0 && a.autoScore === test.questions[i].points).length}
               </div>
               <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.15rem" }}>Correct</div>
             </div>
             <div>
               <div style={{ fontSize: "1.4rem", fontFamily: "'DM Serif Display',serif" }}>
-                {result.graded.filter((a, i) => test.questions[i].type !== "essay" && a.autoScore === 0 && test.questions[i].correctAnswers?.length > 0).length}
+                {result.graded.filter((a, i) => {
+                  const q = test.questions[i];
+                  if (q.type === "essay") return false;
+                  if (q.type === "math" && !q.correctAnswers?.length) return false; // unkeyed = pending not wrong
+                  return a.autoScore === 0;
+                }).length}
               </div>
               <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.15rem" }}>Incorrect</div>
             </div>
@@ -1959,10 +1965,14 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
             const ans = result.graded[i];
             const isEssay = q.type === "essay";
             const isMath = q.type === "math";
-            const hasCorrect = q.correctAnswers?.length > 0;
-            const isCorrect = !isEssay && hasCorrect && ans.autoScore === q.points;
-            const isPending = isEssay || (isMath && !hasCorrect);
-            const isWrong = !isPending && hasCorrect && ans.autoScore < q.points;
+            // Use autoScore to determine result — correctAnswers may be stripped by server for students
+            // If autoScore > 0 → definitely graded correctly (at least partial)
+            // If essay → always pending (teacher grades manually)
+            // If math/short_answer with autoScore === 0: check if we had a correct answer key locally
+            const hasCorrect = q.correctAnswers?.length > 0 || ans.autoScore > 0;
+            const isCorrect = !isEssay && ans.autoScore === q.points && q.points > 0;
+            const isPending = isEssay || (isMath && !isCorrect && ans.autoScore === 0 && !q.correctAnswers?.length);
+            const isWrong = !isPending && !isCorrect && (q.correctAnswers?.length > 0 || ans.autoScore === 0);
 
             const borderColor = isPending ? "#b8860b" : isCorrect ? "#2d6a4f" : isWrong ? "#c84b31" : "var(--border)";
 
