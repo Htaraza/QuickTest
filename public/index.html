@@ -895,7 +895,10 @@ function TestList({ tests, onEdit, onDelete, onGrades, onSave, flash, onNew }) {
                 {test.status}
               </span>
             </div>
-            <p style={S.cardMeta}>{test.questions?.length || 0} questions · {test.questions?.reduce((s, q) => s + (q.points || 0), 0)} pts</p>
+            <p style={S.cardMeta}>
+              {test.questions?.length || 0} questions · {test.questions?.reduce((s, q) => s + (q.points || 0), 0)} pts
+              {test.randomizeQuestions && <span style={{ marginLeft: "0.5rem", ...S.badge, background: "#ede9fc", color: "#6b21a8", fontSize: "0.7rem" }}>🔀 Randomized</span>}
+            </p>
             <div style={{ background: "var(--cream)", borderRadius: "8px", padding: "0.6rem 0.8rem", marginBottom: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Code:</span>
               <span style={{ fontFamily: "monospace", fontWeight: 700, letterSpacing: "0.15em", fontSize: "1.1rem" }}>{test.code}</span>
@@ -922,6 +925,7 @@ function TestBuilder({ test, onSave, onCancel }) {
   const [description, setDescription] = useState(test?.description || "");
   const [inApp, setInApp] = useState(test?.inApp !== false);
   const [allowCalculator, setAllowCalculator] = useState(test?.allowCalculator || false);
+  const [randomizeQuestions, setRandomizeQuestions] = useState(test?.randomizeQuestions || false);
   const [questions, setQuestions] = useState(test?.questions || []);
   const [err, setErr] = useState("");
   const [showPaste, setShowPaste] = useState(false);
@@ -1051,6 +1055,7 @@ function TestBuilder({ test, onSave, onCancel }) {
       description: description.trim(),
       inApp,
       allowCalculator,
+      randomizeQuestions,
       questions: questions,
       code: test?.code || generateCode(),
       status: test?.status || "draft",
@@ -1104,6 +1109,13 @@ function TestBuilder({ test, onSave, onCancel }) {
           </label>
           <span style={{ color: "var(--muted)", fontSize: "0.85rem" }}>
             {allowCalculator ? "Scientific calculator available to students" : "No calculator access"}
+          </span>
+          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer", marginLeft: "0.5rem" }}>
+            <input type="checkbox" checked={randomizeQuestions} onChange={e => setRandomizeQuestions(e.target.checked)} />
+            <span style={{ fontSize: "0.9rem" }}>🔀 Randomize question order</span>
+          </label>
+          <span style={{ color: "var(--muted)", fontSize: "0.85rem" }}>
+            {randomizeQuestions ? "Each student gets questions in a unique random order" : "All students see questions in the same order"}
           </span>
         </div>
       </div>
@@ -1662,7 +1674,7 @@ function GradesView({ testId, tests, onBack, flash }) {
               style={{ ...S.btn, ...S.btnGhost, fontSize: "0.8rem", padding: "0.3rem 0.7rem", opacity: detailIndex === 0 ? 0.4 : 1 }}
             >← Prev</button>
             <button
-              onClick={() => setDetailIndex(i => Math.min(submissions.length - 1, i + 1))}
+              onClick={() => setDetailIndex(n => Math.min(submissions.length - 1, n + 1))}
               disabled={detailIndex === submissions.length - 1}
               style={{ ...S.btn, ...S.btnGhost, fontSize: "0.8rem", padding: "0.3rem 0.7rem", opacity: detailIndex === submissions.length - 1 ? 0.4 : 1 }}
             >Next →</button>
@@ -1699,8 +1711,8 @@ function GradesView({ testId, tests, onBack, flash }) {
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: "1rem" }}>
           <button onClick={() => allowRetake(detail)} style={{ ...S.btn, background: "#fff3cd", color: "#856404", border: "none", fontSize: "0.85rem", borderRadius: "8px" }}>Allow Retake</button>
           <div style={{ display: "flex", gap: "0.5rem" }}>
-            <button onClick={() => setDetailIndex(i => Math.max(0, i - 1))} disabled={detailIndex === 0} style={{ ...S.btn, ...S.btnGhost, opacity: detailIndex === 0 ? 0.4 : 1 }}>← Prev Student</button>
-            <button onClick={() => setDetailIndex(i => Math.min(submissions.length - 1, i + 1))} disabled={detailIndex === submissions.length - 1} style={{ ...S.btn, ...S.btnGhost, opacity: detailIndex === submissions.length - 1 ? 0.4 : 1 }}>Next Student →</button>
+            <button onClick={() => setDetailIndex(n => Math.max(0, n - 1))} disabled={detailIndex === 0} style={{ ...S.btn, ...S.btnGhost, opacity: detailIndex === 0 ? 0.4 : 1 }}>← Prev Student</button>
+            <button onClick={() => setDetailIndex(n => Math.min(submissions.length - 1, n + 1))} disabled={detailIndex === submissions.length - 1} style={{ ...S.btn, ...S.btnGhost, opacity: detailIndex === submissions.length - 1 ? 0.4 : 1 }}>Next Student →</button>
           </div>
         </div>
       </>
@@ -1771,7 +1783,26 @@ function GradesView({ testId, tests, onBack, flash }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 function StudentTest({ test, email, onDone, onInvalidate }) {
   const [currentQ, setCurrentQ] = useState(0);
-  const [answers, setAnswers] = useState(Array(test.questions.length).fill(null).map(() => ({ value: null })));
+  const [answers, setAnswers] = useState(Array(test.questions.length).fill(null).map(() => ({ value: null }))); // length same regardless of order
+
+  // If randomizeQuestions is enabled, shuffle the order once on mount (each student gets a unique order)
+  const [questionOrder] = useState(() => {
+    const order = test.questions.map((_, i) => i);
+    if (test.randomizeQuestions) {
+      // Fisher-Yates shuffle seeded by email so the same student always sees the same order on retry
+      // but different students see different orders
+      for (let i = order.length - 1; i > 0; i--) {
+        // Use a hash of email + question index as a pseudo-random seed
+        const seed = [...(email + i)].reduce((h, c) => (Math.imul(31, h) + c.charCodeAt(0)) | 0, 0);
+        const j = Math.abs(seed) % (i + 1);
+        [order[i], order[j]] = [order[j], order[i]];
+      }
+    }
+    return order;
+  });
+
+  // Ordered questions and a map back to original index (needed for grading alignment)
+  const orderedQuestions = questionOrder.map(i => test.questions[i]);
   const [finished, setFinished] = useState(false);
   const finishedRef = useRef(false);
   const [result, setResult] = useState(null);
@@ -1780,7 +1811,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
   const [submitting, setSubmitting] = useState(false);
   const invalidatedRef = useRef(false);
   const [showCalculator, setShowCalculator] = useState(false);
-  const hasMathQ = test.questions.some(q => q.type === "math");
+  const hasMathQ = orderedQuestions.some(q => q.type === "math");
   const calculatorAllowed = test.allowCalculator || hasMathQ;
 
   const handleInvalidate = async () => {
@@ -1821,8 +1852,8 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
   const finish = async () => {
     setSubmitting(true);
     setShowConfirm(false);
-    // Grade locally
-    const q = test.questions;
+    // Grade locally using ordered questions (as student saw them)
+    const q = orderedQuestions;
     const graded = answers.map((a, i) => {
       const question = q[i];
       let autoScore = 0;
@@ -1857,13 +1888,20 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
     const totalScore = graded.reduce((s, a) => s + (a.autoScore || 0), 0);
     const totalPoints = q.reduce((s, q) => s + (q.points || 0), 0);
     const percentage = totalPoints > 0 ? Math.round((totalScore / totalPoints) * 100) : 0;
+    // Re-map answers back to original question order so server grading aligns with sort_order
+    const reorderedGraded = Array(graded.length);
+    questionOrder.forEach((origIdx, shuffledIdx) => { reorderedGraded[origIdx] = graded[shuffledIdx]; });
     try {
-      const res = await apiFetch('/submissions', { method: 'POST', body: { testId: test.id, studentEmail: email, answers: graded } });
+      const res = await apiFetch('/submissions', { method: 'POST', body: { testId: test.id, studentEmail: email, answers: reorderedGraded } });
       // If server returned per-answer scores, use those (server has full answer key)
       // Otherwise fall back to local grading
       const serverAnswers = res.answers;
+      // Server answers are in original order — re-map back to shuffled display order
       const displayGraded = (serverAnswers && serverAnswers.length === graded.length)
-        ? graded.map((a, i) => ({ ...a, autoScore: serverAnswers[i]?.autoScore ?? a.autoScore }))
+        ? graded.map((a, shuffledIdx) => {
+            const origIdx = questionOrder[shuffledIdx];
+            return { ...a, autoScore: serverAnswers[origIdx]?.autoScore ?? a.autoScore };
+          })
         : graded;
       setResult({ totalScore: res.totalScore ?? totalScore, totalPoints: res.totalPoints ?? totalPoints, percentage: res.percentage ?? percentage, graded: displayGraded });
     } catch (e) {
@@ -1877,9 +1915,9 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
   };
 
   if (finished && result) {
-    const hasEssay = test.questions.some(q => q.type === "essay");
+    const hasEssay = orderedQuestions.some(q => q.type === "essay");
     // A math/short_answer question is pending only if it got 0 AND has no local answer key (server graded = has autoScore > 0)
-    const hasMathNoKey = test.questions.some((q, i) => {
+    const hasMathNoKey = orderedQuestions.some((q, i) => {
       if (q.type !== "math" && q.type !== "short_answer") return false;
       const ans = result.graded[i];
       const scored = ans?.autoScore > 0; // server graded it successfully
@@ -1939,7 +1977,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
             <div>
               <div style={{ fontSize: "1.4rem", fontFamily: "'DM Serif Display',serif" }}>
                 {result.graded.filter((a, i) => {
-                  const q = test.questions[i];
+                  const q = orderedQuestions[i];
                   return q.type !== "essay" && a.autoScore === q.points && q.points > 0;
                 }).length}
               </div>
@@ -1948,10 +1986,8 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
             <div>
               <div style={{ fontSize: "1.4rem", fontFamily: "'DM Serif Display',serif" }}>
                 {result.graded.filter((a, i) => {
-                  const q = test.questions[i];
+                  const q = orderedQuestions[i];
                   if (q.type === "essay") return false;
-                  // Only wrong if: graded (has answer key or got some score before), but scored 0
-                  const wasGraded = q.correctAnswers?.length > 0 || result.graded.some((_, j) => j === i && test.questions[j].type !== "essay");
                   const isPend = a.autoScore === 0 && !q.correctAnswers?.length && q.type !== "multiple_choice" && q.type !== "true_false" && q.type !== "multiple_select";
                   return a.autoScore === 0 && !isPend;
                 }).length}
@@ -1962,9 +1998,9 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
               <div>
                 <div style={{ fontSize: "1.4rem", fontFamily: "'DM Serif Display',serif" }}>
                   {result.graded.filter((a, i) => {
-                    const q = test.questions[i];
+                    const q = orderedQuestions[i];
                     if (q.type === "essay") return true;
-                    if (a.autoScore === q.points && q.points > 0) return false; // correctly graded
+                    if (a.autoScore === q.points && q.points > 0) return false;
                     return a.autoScore === 0 && !q.correctAnswers?.length && q.type !== "multiple_choice" && q.type !== "true_false" && q.type !== "multiple_select";
                   }).length}
                 </div>
@@ -1972,7 +2008,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
               </div>
             )}
             <div>
-              <div style={{ fontSize: "1.4rem", fontFamily: "'DM Serif Display',serif" }}>{test.questions.length}</div>
+              <div style={{ fontSize: "1.4rem", fontFamily: "'DM Serif Display',serif" }}>{orderedQuestions.length}</div>
               <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.15rem" }}>Total Qs</div>
             </div>
           </div>
@@ -1981,7 +2017,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
         {/* Answer review — one card per question */}
         <div style={{ width: "100%", maxWidth: "680px" }}>
           <h3 style={{ color: "var(--paper)", fontFamily: "'DM Serif Display',serif", fontSize: "1.4rem", marginBottom: "1rem" }}>Answer Review</h3>
-          {test.questions.map((q, i) => {
+          {orderedQuestions.map((q, i) => {
             const ans = result.graded[i];
             const isEssay = q.type === "essay";
             const isMath = q.type === "math";
@@ -2121,9 +2157,9 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
     );
   }
 
-  const q = test.questions[currentQ];
+  const q = orderedQuestions[currentQ];
   const ans = answers[currentQ];
-  const progress = ((currentQ + 1) / test.questions.length) * 100;
+  const progress = ((currentQ + 1) / orderedQuestions.length) * 100;
   const answeredCount = answers.filter(a => {
     if (a.value === null || a.value === undefined || a.value === "") return false;
     if (Array.isArray(a.value)) return a.value.length > 0;
@@ -2139,11 +2175,11 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
             <div style={{ fontSize: "2.5rem", marginBottom: "0.75rem" }}>📋</div>
             <h3 style={{ fontFamily: "'DM Serif Display',serif", fontSize: "1.5rem", marginBottom: "0.5rem" }}>Submit Test?</h3>
             <p style={{ color: "var(--muted)", fontSize: "0.9rem", marginBottom: "0.75rem", lineHeight: 1.5 }}>
-              You answered {answeredCount} of {test.questions.length} questions.
+              You answered {answeredCount} of {orderedQuestions.length} questions.
             </p>
-            {answeredCount < test.questions.length && (
+            {answeredCount < orderedQuestions.length && (
               <div style={{ background: "#fff3cd", color: "#856404", borderRadius: "8px", padding: "0.6rem 0.9rem", fontSize: "0.85rem", marginBottom: "1rem" }}>
-                ⚠️ {test.questions.length - answeredCount} question{test.questions.length - answeredCount !== 1 ? "s" : ""} left unanswered
+                ⚠️ {orderedQuestions.length - answeredCount} question{orderedQuestions.length - answeredCount !== 1 ? "s" : ""} left unanswered
               </div>
             )}
             <p style={{ color: "var(--muted)", fontSize: "0.85rem", marginBottom: "1.5rem" }}>You cannot go back after submitting.</p>
@@ -2156,7 +2192,10 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
       )}
       <div style={S.testCard}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
-          <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>{test.title}</span>
+          <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>
+            {test.title}
+            {test.randomizeQuestions && <span style={{ marginLeft: "0.5rem", fontSize: "0.72rem", background: "#ede9fc", color: "#6b21a8", borderRadius: "10px", padding: "0.1rem 0.45rem", fontWeight: 600 }}>🔀</span>}
+          </span>
           <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>{email}</span>
         </div>
         <div style={S.progressBar}>
@@ -2164,7 +2203,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
         </div>
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-          <span style={S.questionNum}>Question {currentQ + 1} of {test.questions.length}</span>
+          <span style={S.questionNum}>Question {currentQ + 1} of {orderedQuestions.length}</span>
           <div style={{ position: "relative" }}>
             <button onClick={() => setShowDropdown(!showDropdown)}
               onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
@@ -2173,7 +2212,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
             </button>
             {showDropdown && (
               <div style={{ position: "absolute", right: 0, top: "calc(100% + 4px)", background: "var(--white)", border: "1.5px solid var(--border)", borderRadius: "8px", zIndex: 100, minWidth: "160px", boxShadow: "0 8px 24px rgba(0,0,0,0.1)", maxHeight: "200px", overflowY: "auto" }}>
-                {test.questions.map((qq, i) => (
+                {orderedQuestions.map((qq, i) => (
                   <div key={`goto-q-${i}`} onClick={() => { setCurrentQ(i); setShowDropdown(false); }}
                     style={{ padding: "0.6rem 1rem", cursor: "pointer", fontSize: "0.85rem", background: i === currentQ ? "var(--cream)" : "transparent", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span>Q{i + 1}</span>
@@ -2241,7 +2280,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
         <div style={S.navRow}>
           <button onClick={() => setCurrentQ(n => n - 1)} disabled={currentQ === 0}
             style={{ ...S.btn, ...S.btnGhost, opacity: currentQ === 0 ? 0.4 : 1 }}>← Previous</button>
-          {currentQ < test.questions.length - 1 ? (
+          {currentQ < orderedQuestions.length - 1 ? (
             <button onClick={() => setCurrentQ(n => n + 1)} style={{ ...S.btn, ...S.btnPrimary }}>Next →</button>
           ) : (
             <button onClick={() => setShowConfirm(true)} disabled={submitting} style={{ ...S.btn, ...S.btnSuccess }}>
