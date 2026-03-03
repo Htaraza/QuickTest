@@ -98,7 +98,7 @@ router.post('/', authMiddleware, async (req, res) => {
     if (questions.length > 0) {
       const { error: qErr } = await supabase.from('questions').insert(
         questions.map((q, i) => ({
-          id: q.id || uuidv4(),
+          id: uuidv4(),
           test_id: test.id,
           sort_order: i,
           type: q.type,
@@ -151,7 +151,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
       if (questions.length > 0) {
         const { error: qErr } = await supabase.from('questions').insert(
           questions.map((q, i) => ({
-            id: q.id || uuidv4(),
+            id: uuidv4(),
             test_id: existing.id,
             sort_order: i,
             type: q.type,
