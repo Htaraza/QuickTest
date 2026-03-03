@@ -775,9 +775,12 @@ function TeacherDashboard({ teacher, onLogout }) {
       // Always update editingTest with the freshly saved data so TestBuilder
       // reinitialises correctly if the user stays on the edit screen
       setEditingTest(saved);
-      if (!noNav) { await loadTests(); setView('tests'); }
+      // Don't re-fetch from server after save — setTests above already has the
+      // fresh data from the PUT response. An extra loadTests() round-trip can
+      // return slightly stale data before Supabase replication settles.
+      if (!noNav) setView('tests');
     } catch (e) { flash('Error saving test: ' + e.message); }
-  }, [tests, loadTests]);
+  }, [tests]);
   const saveDeck = useCallback(async (deck, noNav = false) => {
     try {
       let saved;
