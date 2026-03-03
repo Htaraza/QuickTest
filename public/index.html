@@ -726,14 +726,14 @@ function TeacherDashboard({ teacher, onLogout }) {
   const loadTests = useCallback(async () => {
     try {
       const data = await apiFetch('/tests');
-      setTests(data.tests || []);
+      setTests(data.tests || (Array.isArray(data) ? data : []));
     } catch (e) { console.error('loadTests', e); }
   }, []);
 
   const loadDecks = useCallback(async () => {
     try {
       const data = await apiFetch('/decks');
-      setDecks(data.decks || []);
+      setDecks(data.decks || (Array.isArray(data) ? data : []));
     } catch (e) { console.error('loadDecks', e); }
   }, []);
 
@@ -743,11 +743,13 @@ function TeacherDashboard({ teacher, onLogout }) {
     try {
       let saved;
       if (test.id && tests.find(t => t.id === test.id)) {
-        saved = await apiFetch('/tests/' + test.id, { method: 'PUT', body: test });
-        setTests(prev => prev.map(t => t.id === saved.test.id ? saved.test : t));
+        const res = await apiFetch('/tests/' + test.id, { method: 'PUT', body: test });
+        saved = res.test || res; // handle both {test:{...}} and direct object
+        setTests(prev => prev.map(t => t.id === saved.id ? saved : t));
       } else {
-        saved = await apiFetch('/tests', { method: 'POST', body: test });
-        setTests(prev => [saved.test, ...prev]);
+        const res = await apiFetch('/tests', { method: 'POST', body: test });
+        saved = res.test || res;
+        setTests(prev => [saved, ...prev]);
       }
       if (!noNav) setView('tests');
     } catch (e) { flash('Error saving test: ' + e.message); }
@@ -756,11 +758,13 @@ function TeacherDashboard({ teacher, onLogout }) {
     try {
       let saved;
       if (deck.id && decks.find(d => d.id === deck.id)) {
-        saved = await apiFetch('/decks/' + deck.id, { method: 'PUT', body: deck });
-        setDecks(prev => prev.map(d => d.id === saved.deck.id ? saved.deck : d));
+        const res = await apiFetch('/decks/' + deck.id, { method: 'PUT', body: deck });
+        saved = res.deck || res;
+        setDecks(prev => prev.map(d => d.id === saved.id ? saved : d));
       } else {
-        saved = await apiFetch('/decks', { method: 'POST', body: deck });
-        setDecks(prev => [saved.deck, ...prev]);
+        const res = await apiFetch('/decks', { method: 'POST', body: deck });
+        saved = res.deck || res;
+        setDecks(prev => [saved, ...prev]);
       }
       if (!noNav) setView('decks');
     } catch (e) { flash('Error saving deck: ' + e.message); }
@@ -844,10 +848,10 @@ function TeacherDashboard({ teacher, onLogout }) {
       <div style={S.main}>
         {msg && <div style={{ ...S.success, position: "fixed", top: "1rem", right: "1rem", zIndex: 999 }}>{msg}</div>}
         {view === "tests" && <TestList tests={tests} onEdit={t => { setEditingTest(t); setView("edit"); }} onDelete={deleteTest} onGrades={t => { setSelectedTestId(t.id); setView("grades"); }} onSave={saveTest} flash={flash} onNew={() => setView("create")} />}
-        {(view === "create" || view === "edit") && <TestBuilder test={editingTest} onSave={async (t) => { await saveTest(t); flash("Test saved!"); }} onCancel={() => setView("tests")} />}
+        {(view === "create" || view === "edit") && <TestBuilder test={editingTest} onSave={async (t) => { flash("Test saved!"); await saveTest(t); }} onCancel={() => setView("tests")} />}
         {view === "grades" && <GradesView testId={selectedTestId} tests={tests} onBack={() => setView("tests")} flash={flash} />}
         {view === "decks" && <DeckList decks={decks} onEdit={d => { setEditingDeck(d); setView("edit-deck"); }} onDelete={deleteDeck} onSave={saveDeck} flash={flash} onNew={() => { setEditingDeck(null); setView("create-deck"); }} />}
-        {(view === "create-deck" || view === "edit-deck") && <DeckBuilder deck={editingDeck} onSave={async (d) => { await saveDeck(d); flash("Deck saved!"); }} onCancel={() => setView("decks")} />}
+        {(view === "create-deck" || view === "edit-deck") && <DeckBuilder deck={editingDeck} onSave={async (d) => { flash("Deck saved!"); await saveDeck(d); }} onCancel={() => setView("decks")} />}
       </div>
     </div>
   );
@@ -903,7 +907,7 @@ function TestList({ tests, onEdit, onDelete, onGrades, onSave, flash, onNew }) {
                 {test.status === "active" ? "Close" : "Activate"}
               </button>
               <button onClick={() => onGrades(test)} style={{ ...S.btn, ...S.btnGhost, fontSize: "0.8rem", padding: "0.4rem 0.8rem" }}>📊 Grades</button>
-              <button onClick={() => onDelete(test.id)} style={{ ...S.btn, background: "none", border: "none", color: "var(--danger)", fontSize: "0.8rem", padding: "0.4rem 0.8rem", borderRadius: "8px" }}>🗑</button>
+              <button onClick={() => { if (window.confirm("Delete this test? This cannot be undone.")) onDelete(test.id); }} style={{ ...S.btn, background: "none", border: "none", color: "var(--danger)", fontSize: "0.8rem", padding: "0.4rem 0.8rem", borderRadius: "8px" }}>🗑 Delete</button>
             </div>
           </div>
         ))}
@@ -1035,7 +1039,8 @@ function TestBuilder({ test, onSave, onCancel }) {
     });
   }, []);
 
-  const handleSave = () => {
+  const [saving, setSaving] = useState(false);
+  const handleSave = async () => {
     if (!title.trim()) { setErr("Please add a title."); return; }
     if (questions.length === 0) { setErr("Add at least one question."); return; }
     for (let i = 0; i < questions.length; i++) {
@@ -1053,7 +1058,14 @@ function TestBuilder({ test, onSave, onCancel }) {
       updatedAt: Date.now()
     };
     if (test?.id) saved.id = test.id;
-    onSave(saved);
+    setSaving(true);
+    setErr("");
+    try {
+      await onSave(saved);
+    } catch (e) {
+      setErr("Failed to save: " + e.message);
+      setSaving(false);
+    }
   };
 
   return (
@@ -1064,8 +1076,8 @@ function TestBuilder({ test, onSave, onCancel }) {
           <p style={S.pageSub}>Build your assessment</p>
         </div>
         <div style={{ display: "flex", gap: "0.75rem" }}>
-          <button onClick={onCancel} style={{ ...S.btn, ...S.btnGhost }}>Cancel</button>
-          <button onClick={handleSave} style={{ ...S.btn, ...S.btnPrimary }}>Save Test</button>
+          <button onClick={onCancel} disabled={saving} style={{ ...S.btn, ...S.btnGhost, opacity: saving ? 0.5 : 1 }}>Cancel</button>
+          <button onClick={handleSave} disabled={saving} style={{ ...S.btn, ...S.btnPrimary, opacity: saving ? 0.7 : 1 }}>{saving ? "Saving..." : "Save Test"}</button>
         </div>
       </div>
       {err && <div style={S.error}>{err}</div>}
@@ -2247,14 +2259,22 @@ function DeckBuilder({ deck, onSave, onCancel }) {
     if (t < 0 || t >= cs.length) return;
     [cs[idx], cs[t]] = [cs[t], cs[idx]]; setCards(cs);
   };
-  const handleSave = () => {
+  const [saving, setSaving] = useState(false);
+  const handleSave = async () => {
     if (!title.trim()) { setErr("Please add a title."); return; }
     for (let i = 0; i < cards.length; i++) {
       if (!cards[i].front.trim() || !cards[i].back.trim()) { setErr("Card " + (i+1) + " needs both a front and back."); return; }
     }
     const deckData = { title: title.trim(), description: description.trim(), cards: cards.map(({ id, ...rest }) => rest), code: deck?.code || generateCode(), status: deck?.status || "inactive", createdAt: deck?.createdAt || Date.now(), updatedAt: Date.now() };
     if (deck?.id) deckData.id = deck.id;
-    onSave(deckData);
+    setSaving(true);
+    setErr("");
+    try {
+      await onSave(deckData);
+    } catch (e) {
+      setErr("Failed to save: " + e.message);
+      setSaving(false);
+    }
   };
 
   return (
@@ -2265,8 +2285,8 @@ function DeckBuilder({ deck, onSave, onCancel }) {
           <p style={S.pageSub}>Build your study set — {cards.length} card{cards.length !== 1 ? "s" : ""}</p>
         </div>
         <div style={{ display: "flex", gap: "0.75rem" }}>
-          <button onClick={onCancel} style={{ ...S.btn, ...S.btnGhost }}>Cancel</button>
-          <button onClick={handleSave} style={{ ...S.btn, ...S.btnPrimary }}>Save Deck</button>
+          <button onClick={onCancel} disabled={saving} style={{ ...S.btn, ...S.btnGhost, opacity: saving ? 0.5 : 1 }}>Cancel</button>
+          <button onClick={handleSave} disabled={saving} style={{ ...S.btn, ...S.btnPrimary, opacity: saving ? 0.7 : 1 }}>{saving ? "Saving..." : "Save Deck"}</button>
         </div>
       </div>
       {err && <div style={S.error}>{err}</div>}
