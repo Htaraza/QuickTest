@@ -130,7 +130,10 @@ function _mockHandler(path, options) {
       try {
         const tests = JSON.parse(localStorage.getItem(key)) || [];
         const test = tests.find(t => t.code === code && t.status === 'active');
-        if (test) return { test };
+        if (test) {
+          // Strip correct answers so students can't see the key (mirrors real server behaviour)
+          return { test: { ...test, questions: (test.questions || []).map(({ correctAnswers, ...rest }) => rest) } };
+        }
       } catch {}
     }
     throw new Error('Invalid or inactive test code.');
@@ -757,22 +760,25 @@ function TeacherDashboard({ teacher, onLogout }) {
 
   useEffect(() => { loadTests(); loadDecks(); }, [loadTests, loadDecks]);
 
-  const saveTest = async (test, noNav = false) => {
+  const saveTest = useCallback(async (test, noNav = false) => {
     try {
       let saved;
       if (test.id && tests.find(t => t.id === test.id)) {
         const res = await apiFetch('/tests/' + test.id, { method: 'PUT', body: test });
-        saved = res.test || res; // handle both {test:{...}} and direct object
+        saved = res.test || res;
         setTests(prev => prev.map(t => t.id === saved.id ? saved : t));
       } else {
         const res = await apiFetch('/tests', { method: 'POST', body: test });
         saved = res.test || res;
         setTests(prev => [saved, ...prev]);
       }
+      // Always update editingTest with the freshly saved data so TestBuilder
+      // reinitialises correctly if the user stays on the edit screen
+      setEditingTest(saved);
       if (!noNav) { await loadTests(); setView('tests'); }
     } catch (e) { flash('Error saving test: ' + e.message); }
-  };
-  const saveDeck = async (deck, noNav = false) => {
+  }, [tests, loadTests]);
+  const saveDeck = useCallback(async (deck, noNav = false) => {
     try {
       let saved;
       if (deck.id && decks.find(d => d.id === deck.id)) {
@@ -786,7 +792,7 @@ function TeacherDashboard({ teacher, onLogout }) {
       }
       if (!noNav) { await loadDecks(); setView('decks'); }
     } catch (e) { flash('Error saving deck: ' + e.message); }
-  };
+  }, [decks, loadDecks]);
   const deleteTest = async (id) => {
     try { await apiFetch('/tests/' + id, { method: 'DELETE' }); setTests(prev => prev.filter(t => t.id !== id)); flash('Test deleted.'); }
     catch (e) { flash('Error deleting: ' + e.message); }
@@ -866,7 +872,7 @@ function TeacherDashboard({ teacher, onLogout }) {
       <div style={S.main}>
         {msg && <div style={{ ...S.success, position: "fixed", top: "1rem", right: "1rem", zIndex: 999 }}>{msg}</div>}
         {view === "tests" && <TestList tests={tests} onEdit={t => { setEditingTest(tests.find(x => x.id === t.id) || t); setView("edit"); }} onDelete={deleteTest} onGrades={t => { setSelectedTestId(t.id); setView("grades"); }} onSave={saveTest} flash={flash} onNew={() => setView("create")} />}
-        {(view === "create" || view === "edit") && <TestBuilder key={editingTest?.id || "new"} test={editingTest} onSave={async (t) => { flash("Test saved!"); await saveTest(t); }} onCancel={() => setView("tests")} />}
+        {(view === "create" || view === "edit") && <TestBuilder key={(editingTest?.id || "new") + "-" + (editingTest?.updatedAt || "")} test={editingTest} onSave={async (t) => { flash("Test saved!"); await saveTest(t); }} onCancel={() => setView("tests")} />}
         {view === "grades" && <GradesView testId={selectedTestId} tests={tests} onBack={() => setView("tests")} flash={flash} />}
         {view === "decks" && <DeckList decks={decks} onEdit={d => { setEditingDeck(d); setView("edit-deck"); }} onDelete={deleteDeck} onSave={saveDeck} flash={flash} onNew={() => { setEditingDeck(null); setView("create-deck"); }} />}
         {(view === "create-deck" || view === "edit-deck") && <DeckBuilder deck={editingDeck} onSave={async (d) => { flash("Deck saved!"); await saveDeck(d); }} onCancel={() => setView("decks")} />}
@@ -1104,6 +1110,13 @@ function TestBuilder({ test, onSave, onCancel }) {
     for (let i = 0; i < questions.length; i++) {
       if (!questions[i].text.trim()) { setErr(`Question ${i + 1} has no text.`); return; }
     }
+    if (useSchedule && scheduledActivation) {
+      const schedTime = new Date(scheduledActivation).getTime();
+      if (schedTime <= Date.now()) {
+        setErr("Scheduled activation time must be in the future.");
+        return;
+      }
+    }
     const saved = {
       title: title.trim(),
       description: description.trim(),
@@ -1241,7 +1254,7 @@ function TestBuilder({ test, onSave, onCancel }) {
                 )}
                 {timeLimitMinutes > 0 && (
                   <p style={{ fontSize: "0.78rem", color: "var(--muted)", marginTop: "0.3rem" }}>
-                    Limit: {timeLimitHours > 0 && timeLimitMins > 0 ? `${timeLimitHours}h ${timeLimitMins}m` : timeLimitHours > 0 ? `${timeLimitHours} hour${timeLimitHours !== 1 ? "s" : ""}` : `${timeLimitMins} minute${timeLimitMins !== 1 ? "s" : ""}`}
+                    Limit: {(parseInt(timeLimitHours)||0) > 0 && (parseInt(timeLimitMins)||0) > 0 ? `${timeLimitHours}h ${timeLimitMins}m` : (parseInt(timeLimitHours)||0) > 0 ? `${timeLimitHours} hour${parseInt(timeLimitHours) !== 1 ? "s" : ""}` : `${timeLimitMins} minute${parseInt(timeLimitMins) !== 1 ? "s" : ""}`}
                     {" · "}Test auto-submits when time runs out.
                   </p>
                 )}
@@ -1824,8 +1837,8 @@ function GradesView({ testId, tests, onBack, flash }) {
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem" }}>
                 <strong>Q{i + 1}: {q.text}</strong>
                 <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", fontSize: "0.85rem" }}>
-                  <input type="number" min="0" max={q.points} defaultValue={score}
-                    onBlur={e => { const v = Number(e.target.value); if (v !== score) gradeManually(detail, i, v, detailIndex); }}
+                  <input key={`grade-${detail.id}-${i}`} type="number" min="0" max={q.points} defaultValue={score}
+                    onBlur={e => { const v = Math.min(q.points, Math.max(0, Number(e.target.value))); if (v !== score) gradeManually(detail, i, v, detailIndex); }}
                     style={{ width: "50px", ...S.input, padding: "0.3rem 0.5rem" }} />
                   <span style={{ color: "var(--muted)" }}>/ {q.points} pts</span>
                 </div>
@@ -2023,6 +2036,7 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
 
   const finish = async () => {
     if (finishedRef.current) return; // prevent double-submission (timer + manual)
+    finishedRef.current = true; // set immediately so timer can't race
     if (timerRef.current) clearInterval(timerRef.current);
     setSubmitting(true);
     setShowConfirm(false);
@@ -2162,8 +2176,12 @@ function StudentTest({ test, email, onDone, onInvalidate }) {
                 {result.graded.filter((a, i) => {
                   const q = orderedQuestions[i];
                   if (q.type === "essay") return false;
-                  const isPend = a.autoScore === 0 && !q.correctAnswers?.length && q.type !== "multiple_choice" && q.type !== "true_false" && q.type !== "multiple_select";
-                  return a.autoScore === 0 && !isPend;
+                  if (a.autoScore === q.points && q.points > 0) return false; // correct
+                  // For auto-graded types, wrong answer = autoScore 0
+                  if (["multiple_choice","true_false","multiple_select"].includes(q.type)) return a.autoScore === 0;
+                  // For math/short_answer: wrong only if server graded it (autoScore would be >0 if right, 0 if wrong)
+                  // but only if there was an answer key (server gave a definitive grade)
+                  return a.autoScore === 0 && (q.correctAnswers?.length > 0 || false);
                 }).length}
               </div>
               <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.15rem" }}>Incorrect</div>
